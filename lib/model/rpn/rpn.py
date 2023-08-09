@@ -36,9 +36,15 @@ class _RPN(nn.Module):
         self.RPN_bbox_pred = nn.Conv2d(512, self.nc_bbox_out, 1, 1, 0)
 
         # define proposal layer
+        # feat_stride   = 16 
+        # anchor_scales = [8,16,32]
+        # anchor_ratios = [0.5,1,2]
         self.RPN_proposal = _ProposalLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
 
         # define anchor target layer
+        # feat_stride   = 16 
+        # anchor_scales = [8,16,32]
+        # anchor_ratios = [0.5,1,2]
         self.RPN_anchor_target = _AnchorTargetLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
 
         self.rpn_loss_cls = 0
@@ -56,26 +62,46 @@ class _RPN(nn.Module):
         return x
 
     def forward(self, base_feat, im_info, gt_boxes, num_boxes):
+        # Feature maps를 입력받아 region proposals를 생성함
+        ## base_feat = feature maps from backbone    (B, 512, 37, 37) -> 2D images
+        ## im_info   = image information             (B, 3)           -> (600, 600, ?)
+        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)       -> (x1, y1, x2, y2, ?)
+        ## num_boxes = number of ground-truth bboxes (B,)             -> (#bboxes)
 
         batch_size = base_feat.size(0)
 
         # return feature map after convrelu layer
+        # base_feat = (B, 512, 37, 37)
         rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
+        # rpn_conv1 = (B, 512, 37, 37)
+
         # get rpn classification score
         rpn_cls_score = self.RPN_cls_score(rpn_conv1)
-
+        # rpn_cls_score = (B, 18, 37, 37)
         rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)
-        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape, 1)
+        # rpn_cls_score_reshape = (B, 2, 333, 37)
+        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape, 1) # bg/fg에 대한 softmax
+        # rpn_cls_prob_reshape = (B, 1, 666, 37)
         rpn_cls_prob = self.reshape(rpn_cls_prob_reshape, self.nc_score_out)
+        # rpn_cls_prob = (B, 18, 37, 37)
 
         # get rpn offsets to the anchor boxes
         rpn_bbox_pred = self.RPN_bbox_pred(rpn_conv1)
+        # rpn_bbox_pred = (B, 36, 37, 37)
 
         # proposal layer
         cfg_key = 'TRAIN' if self.training else 'TEST'
 
+        # 예측값을 바탕으로 proposals를 생성
+        # rpn_cls_prob  = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
+        # rpn_bbox_pred = (B, 36, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 bbox offset 예측값
+        # im_info       = (B, 3)
+        # cfg_key       = 'TRAIN'
         rois = self.RPN_proposal((rpn_cls_prob.data, rpn_bbox_pred.data,
                                  im_info, cfg_key))
+        
+        # rois = (B, 2000, 5)
+        # 2000개의 proposals에 대해 (batch_num, x1, y1, x2, y2)로 구성됨
 
         self.rpn_loss_cls = 0
         self.rpn_loss_box = 0
@@ -84,27 +110,38 @@ class _RPN(nn.Module):
         if self.training:
             assert gt_boxes is not None
 
+            # training labels를 생성
+            # rpn_cls_score = (B, 18, 37, 37) 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
+            # gt_boxes      = (B, 20, 5)      ground-truth bboxes의 좌표
+            # im_info       = (B, 3)          image resolution 정보     
+            # num_boxes     = (B,)            ground-truth bboxes의 수
             rpn_data = self.RPN_anchor_target((rpn_cls_score.data, gt_boxes, im_info, num_boxes))
+            # rpn_data[0] = labels               (B, 1, 333, 37)
+            # rpn_data[1] = bbox_targets         (B, 36, 37, 37)
+            # rpn_data[2] = bbox_inside_weights  (B, 36, 37, 37)
+            # rpn_data[3] = bbox_outside_weights (B, 36, 37, 37)
 
+            # Objectness score loss 계산
             # compute classification loss
-            rpn_cls_score = rpn_cls_score_reshape.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2)
-            rpn_label = rpn_data[0].view(batch_size, -1)
+            rpn_cls_score = rpn_cls_score_reshape.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2) # (B, 12321, 2)
+            rpn_label = rpn_data[0].view(batch_size, -1) # (B, 12321)
 
-            rpn_keep = Variable(rpn_label.view(-1).ne(-1).nonzero().view(-1))
-            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep)
-            rpn_label = torch.index_select(rpn_label.view(-1), 0, rpn_keep.data)
+            rpn_keep = Variable(rpn_label.view(-1).ne(-1).nonzero().view(-1)) # (Bn,)
+            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep) # (Bn, 2)
+            rpn_label = torch.index_select(rpn_label.view(-1), 0, rpn_keep.data) # (Bn,)
             rpn_label = Variable(rpn_label.long())
-            self.rpn_loss_cls = F.cross_entropy(rpn_cls_score, rpn_label)
+            self.rpn_loss_cls = F.cross_entropy(rpn_cls_score, rpn_label) # -> scalar loss value
             fg_cnt = torch.sum(rpn_label.data.ne(0))
 
+            # bbox reg loss 계산
             rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = rpn_data[1:]
 
-            # compute bbox regression loss
-            rpn_bbox_inside_weights = Variable(rpn_bbox_inside_weights)
-            rpn_bbox_outside_weights = Variable(rpn_bbox_outside_weights)
-            rpn_bbox_targets = Variable(rpn_bbox_targets)
+            # compute bbox regression loss  
+            rpn_bbox_inside_weights = Variable(rpn_bbox_inside_weights)   # (B, 36, 37, 37)
+            rpn_bbox_outside_weights = Variable(rpn_bbox_outside_weights) # (B, 36, 37, 37)
+            rpn_bbox_targets = Variable(rpn_bbox_targets)                 # (B, 36, 37, 37)
 
             self.rpn_loss_box = _smooth_l1_loss(rpn_bbox_pred, rpn_bbox_targets, rpn_bbox_inside_weights,
-                                                            rpn_bbox_outside_weights, sigma=3, dim=[1,2,3])
+                                                            rpn_bbox_outside_weights, sigma=3, dim=[1,2,3]) # -> scalar loss value
 
         return rois, self.rpn_loss_cls, self.rpn_loss_box

@@ -26,9 +26,9 @@ class _ProposalTargetLayer(nn.Module):
     def __init__(self, nclasses):
         super(_ProposalTargetLayer, self).__init__()
         self._num_classes = nclasses
-        self.BBOX_NORMALIZE_MEANS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS)
-        self.BBOX_NORMALIZE_STDS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS)
-        self.BBOX_INSIDE_WEIGHTS = torch.FloatTensor(cfg.TRAIN.BBOX_INSIDE_WEIGHTS)
+        self.BBOX_NORMALIZE_MEANS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_MEANS) # (0.0, 0.0, 0.0, 0.0)
+        self.BBOX_NORMALIZE_STDS = torch.FloatTensor(cfg.TRAIN.BBOX_NORMALIZE_STDS)   # (0.1, 0.1, 0.2, 0.2)
+        self.BBOX_INSIDE_WEIGHTS = torch.FloatTensor(cfg.TRAIN.BBOX_INSIDE_WEIGHTS)   # (1.0, 1.0, 1.0, 1.0)
 
     def forward(self, all_rois, gt_boxes, num_boxes):
 

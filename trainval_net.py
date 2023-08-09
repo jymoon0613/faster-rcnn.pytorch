@@ -234,6 +234,7 @@ if __name__ == '__main__':
     cfg.CUDA = True
 
   # initilize the network here.
+  # 본 리뷰에서는 VGG-16을 사용한다고 가정함
   if args.net == 'vgg16':
     fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)
   elif args.net == 'res101':
@@ -308,6 +309,11 @@ if __name__ == '__main__':
     data_iter = iter(dataloader)
     for step in range(iters_per_epoch):
       data = next(data_iter)
+      # 참고: checker.ipynb
+      ## data[0] = input image                   (B, 3, H, W) -> 2D images
+      ## data[1] = image information             (B, 3)       -> (h, w, ?)
+      ## data[2] = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, ?)
+      ## data[3] = number of ground-truth bboxes (B,)         -> (#bboxes)
       with torch.no_grad():
               im_data.resize_(data[0].size()).copy_(data[0])
               im_info.resize_(data[1].size()).copy_(data[1])

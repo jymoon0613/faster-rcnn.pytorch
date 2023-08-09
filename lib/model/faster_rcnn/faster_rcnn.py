@@ -31,30 +31,44 @@ class _fasterRCNN(nn.Module):
         self.RCNN_loss_bbox = 0
 
         # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model)
-        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
+        self.RCNN_rpn = _RPN(self.dout_base_model) # self.dout_base_model = 512
+        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes) # 21 (20 category + 1 bg)
 
-        # self.RCNN_roi_pool = _RoIPooling(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0/16.0)
-        # self.RCNN_roi_align = RoIAlignAvg(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0/16.0)
-
+        # cfg.POOLING_SIZE = 7
         self.RCNN_roi_pool = ROIPool((cfg.POOLING_SIZE, cfg.POOLING_SIZE), 1.0/16.0)
         self.RCNN_roi_align = ROIAlign((cfg.POOLING_SIZE, cfg.POOLING_SIZE), 1.0/16.0, 0)
 
     def forward(self, im_data, im_info, gt_boxes, num_boxes):
         batch_size = im_data.size(0)
 
+        # 참고: checker.ipynb
+        ## im_data   = input image                   (B, 3, H, W) -> 2D images
+        ## im_info   = image information             (B, 3)       -> (h, w, ?)
+        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, ?)
+        ## num_boxes = number of ground-truth bboxes (B,)         -> (#bboxes)
+
         im_info = im_info.data
         gt_boxes = gt_boxes.data
         num_boxes = num_boxes.data
 
         # feed image data to base model to obtain base feature map
+        # im_data: (B, 3, 600, 600)
+        ## 입력 resolution이 (600, 600)이라고 가정함
         base_feat = self.RCNN_base(im_data)
+        # base_feat: (B, 512, 37, 37)
 
         # feed base feature map tp RPN to obtain rois
         rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
+        # rois          = (B, 2000, 5) -> 2000개의 proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
+        # rpn_loss_cls  = scalar value -> RPN의 cls_loss
+        # rpn_loss_bbox = scalar value -> RPN의 bbox_loss
 
         # if it is training phrase, then use ground trubut bboxes for refining
         if self.training:
+            # detection loss 계산을 위한 target 생성
+            # rois      = (B, 2000, 5)
+            # gt_boxes  = (B, 20, 5)
+            # num_boxes = (B,)
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
 
@@ -96,7 +110,7 @@ class _fasterRCNN(nn.Module):
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
 
-        if self.training:
+        if self.training: # True
             # classification loss
             RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
 

@@ -214,11 +214,11 @@ def bbox_overlaps_batch(anchors, gt_boxes):
     overlaps: (N, K) ndarray of overlap between boxes and query_boxes
     """
 
-    # anchors  = (n, 4)
-    # gt_boxes = (B, 20, 5)
-
     batch_size = gt_boxes.size(0) # B
 
+    # _AnchorTargetLayer
+    # anchors  = (n, 4)
+    # gt_boxes = (B, 20, 5)
     # 현재 anchors.dim() == 2
     if anchors.dim() == 2:
 
@@ -280,45 +280,71 @@ def bbox_overlaps_batch(anchors, gt_boxes):
 
         # overlaps = (B, n, 20)
 
+    # _ProposalTargetLayer
+    # anchors  = (B, 2020, 5)
+    # gt_boxes = (B, 20, 5)
+    # 현재 anchors.dim() == 3
     elif anchors.dim() == 3:
-        N = anchors.size(1)
-        K = gt_boxes.size(1)
+        N = anchors.size(1) # 2020
+        K = gt_boxes.size(1) #  20
 
         if anchors.size(2) == 4:
             anchors = anchors[:,:,:4].contiguous()
         else:
-            anchors = anchors[:,:,1:5].contiguous()
+            anchors = anchors[:,:,1:5].contiguous() # (B, 2020, 4)
 
-        gt_boxes = gt_boxes[:,:,:4].contiguous()
+        gt_boxes = gt_boxes[:,:,:4].contiguous() # (B, 20, 4)
 
-        gt_boxes_x = (gt_boxes[:,:,2] - gt_boxes[:,:,0] + 1)
-        gt_boxes_y = (gt_boxes[:,:,3] - gt_boxes[:,:,1] + 1)
-        gt_boxes_area = (gt_boxes_x * gt_boxes_y).view(batch_size, 1, K)
+        # gt_boxes의 크기 계산
+        # 먼저 gt_boxes의 너비/높이 계산
+        gt_boxes_x = (gt_boxes[:,:,2] - gt_boxes[:,:,0] + 1) # (B, 20) - (B, 20) + 1 = (B, 20)
+        gt_boxes_y = (gt_boxes[:,:,3] - gt_boxes[:,:,1] + 1) # (B, 20) - (B, 20) + 1 = (B, 20)
 
-        anchors_boxes_x = (anchors[:,:,2] - anchors[:,:,0] + 1)
-        anchors_boxes_y = (anchors[:,:,3] - anchors[:,:,1] + 1)
-        anchors_area = (anchors_boxes_x * anchors_boxes_y).view(batch_size, N, 1)
+        # 다음으로 gt_boxes의 크기 계산
+        gt_boxes_area = (gt_boxes_x * gt_boxes_y).view(batch_size, 1, K) # (B, 20) * (B, 20) = (B, 20) -> (B, 1, 20)
+        # gt_boxes_area = (B, 1, 20)
 
+        # anchor boxes의 크기 계산
+        # 먼저 anchor boxes의 너비/높이 계산
+        anchors_boxes_x = (anchors[:,:,2] - anchors[:,:,0] + 1) # (B, 2020) - (B, 2020) + 1 = (B, 2020)
+        anchors_boxes_y = (anchors[:,:,3] - anchors[:,:,1] + 1) # (B, 2020) - (B, 2020) + 1 = (B, 2020)
+
+        # 다음으로 anchor boxes의 크기 계산
+        anchors_area = (anchors_boxes_x * anchors_boxes_y).view(batch_size, N, 1) # (B, 2020) * (B, 2020) = (B, 2020) -> (B, 2020, 1)
+        # anchors_area = (B, 2020, 1)
+
+        # 크기가 0인 gt_boxes, anchor boxes 식별
         gt_area_zero = (gt_boxes_x == 1) & (gt_boxes_y == 1)
         anchors_area_zero = (anchors_boxes_x == 1) & (anchors_boxes_y == 1)
 
-        boxes = anchors.view(batch_size, N, 1, 4).expand(batch_size, N, K, 4)
-        query_boxes = gt_boxes.view(batch_size, 1, K, 4).expand(batch_size, N, K, 4)
+        # IoU 계산
+        # 먼저, reshape 진행
+        boxes = anchors.view(batch_size, N, 1, 4).expand(batch_size, N, K, 4) # (B, 2020, 1, 4) -> (B, 2020, 20, 4)
+        query_boxes = gt_boxes.view(batch_size, 1, K, 4).expand(batch_size, N, K, 4) # (B, 1, 20, 4) -> (B, 2020, 20, 4)
 
+        # intersection의 너비/높이 계산
+        # 음수인 경우 필터링
         iw = (torch.min(boxes[:,:,:,2], query_boxes[:,:,:,2]) -
-            torch.max(boxes[:,:,:,0], query_boxes[:,:,:,0]) + 1)
+            torch.max(boxes[:,:,:,0], query_boxes[:,:,:,0]) + 1) # (B, 2020, 20)
         iw[iw < 0] = 0
 
         ih = (torch.min(boxes[:,:,:,3], query_boxes[:,:,:,3]) -
-            torch.max(boxes[:,:,:,1], query_boxes[:,:,:,1]) + 1)
+            torch.max(boxes[:,:,:,1], query_boxes[:,:,:,1]) + 1) # (B, 2020, 20)
         ih[ih < 0] = 0
-        ua = anchors_area + gt_boxes_area - (iw * ih)
 
-        overlaps = iw * ih / ua
+        # 최종적으로 IoU 계산
+        # 모든 n개의 anchor boxes와 모든 20개의 gt_boxes 간의 IoU
+        ua = anchors_area + gt_boxes_area - (iw * ih) # (B, 2020, 1) + (B, 1, 20) - (B, 2020, 20) = (B, 2020, 20)
+        overlaps = iw * ih / ua # (B, 2020, 20) * (B, 2020, 20) / (B, 2020, 20) = (B, 2020, 20)
 
         # mask the overlap here.
+        # 이전에 식별한 크기가 0인 gt_boxes, anchor boxes 처리
+        # gt_area의 크기가 0인 경우 0으로, anchor_area가 0인 경우 -1로 처리
         overlaps.masked_fill_(gt_area_zero.view(batch_size, 1, K).expand(batch_size, N, K), 0)
         overlaps.masked_fill_(anchors_area_zero.view(batch_size, N, 1).expand(batch_size, N, K), -1)
+
+        # overlaps = (B, 2020, 20)
+
     else:
         raise ValueError('anchors input dimension is not correct.')
 

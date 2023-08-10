@@ -44,7 +44,7 @@ class _fasterRCNN(nn.Module):
         # 참고: checker.ipynb
         ## im_data   = input image                   (B, 3, H, W) -> 2D images
         ## im_info   = image information             (B, 3)       -> (h, w, ?)
-        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, ?)
+        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, class_label)
         ## num_boxes = number of ground-truth bboxes (B,)         -> (#bboxes)
 
         im_info = im_info.data
@@ -71,11 +71,16 @@ class _fasterRCNN(nn.Module):
             # num_boxes = (B,)
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
+            # rois            = (B, 128, 5)
+            # rois_label      = (B, 128)
+            # rois_target     = (B, 128, 4)
+            # rois_inside_ws  = (B, 128, 4)
+            # rois_outside_ws = (B, 128, 4)
 
-            rois_label = Variable(rois_label.view(-1).long())
-            rois_target = Variable(rois_target.view(-1, rois_target.size(2)))
-            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2)))
-            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2)))
+            rois_label = Variable(rois_label.view(-1).long()) # (128B)                           
+            rois_target = Variable(rois_target.view(-1, rois_target.size(2))) # (128B, 4)  
+            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2))) # (128B, 4)
+            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2))) # (128B, 4)
         else:
             rois_label = None
             rois_target = None
@@ -85,42 +90,61 @@ class _fasterRCNN(nn.Module):
             rpn_loss_bbox = 0
 
         rois = Variable(rois)
-        # do roi pooling based on predicted rois
 
+        # do roi pooling based on predicted rois
+        # RoI pooling 혹은 RoI align을 적용하여 feature 추출
+        # model.roi_layers.roi_pool의 SlowROIPool 참조
+        # RoI align은 RoI pooling과 달리 bilinear interpolation을 사용하여 feature maps 상에서 bbox의 더 정확한 위치에서 features를 추출함
+        # base_feat = (B, 512, 37, 37)
+        # rois.view(-1, 5) = (128B, 5)
         if cfg.POOLING_MODE == 'align':
             pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
+            # pooled_feat (128B, 512, 7, 7)
         elif cfg.POOLING_MODE == 'pool':
             pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
+            # pooled_feat (128B, 512, 7, 7)
 
         # feed pooled features to top model
+        # features를 detection head로 전달하고 loss 계산
+        # pooled_feat (128B, 512, 7, 7)
         pooled_feat = self._head_to_tail(pooled_feat)
+        # pooled_feat = (128B, 4096)
 
         # compute bbox offset
         bbox_pred = self.RCNN_bbox_pred(pooled_feat)
+        # bbox_pred = (128B, 4)
         if self.training and not self.class_agnostic:
             # select the corresponding columns according to roi labels
-            bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4))
-            bbox_pred = bbox_pred_select.squeeze(1)
+            bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4) # bbox_pred_view = (128B, 1, 4)
+            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4)) # (128B, 1, 4)
+            bbox_pred = bbox_pred_select.squeeze(1) # (128B, 4)
 
         # compute object classification probability
-        cls_score = self.RCNN_cls_score(pooled_feat)
-        cls_prob = F.softmax(cls_score, 1)
+        cls_score = self.RCNN_cls_score(pooled_feat) # (128B, 21)
+        cls_prob = F.softmax(cls_score, 1) # (128B, 21)
 
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
 
         if self.training: # True
             # classification loss
-            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
+            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label) # scalar loss value
 
             # bounding box regression L1 loss
-            RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
+            RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws) # scalar loss value
 
 
-        cls_prob = cls_prob.view(batch_size, rois.size(1), -1)
-        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1)
+        cls_prob = cls_prob.view(batch_size, rois.size(1), -1) # (B, 128, 21)
+        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1) # (B, 128, 4)
 
+        # rois           = (B, 128, 5)
+        # cls_prob       = (B, 128, 21)
+        # bbox_pred      = (B, 128, 4)
+        # rpn_loss_cls   = scalar loss value
+        # rpn_loss_bbox  = scalar loss value
+        # RCNN_loss_cls  = scalar loss value
+        # RCNN_loss_bbox = scalar loss value
+        # rois_label     = (B, 128)
         return rois, cls_prob, bbox_pred, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label
 
     def _init_weights(self):

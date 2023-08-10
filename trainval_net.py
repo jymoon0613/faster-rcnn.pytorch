@@ -326,6 +326,15 @@ if __name__ == '__main__':
       RCNN_loss_cls, RCNN_loss_bbox, \
       rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
 
+      # rois           = (B, 128, 5)
+      # cls_prob       = (B, 128, 21)
+      # bbox_pred      = (B, 128, 4)
+      # rpn_loss_cls   = scalar loss value
+      # rpn_loss_box   = scalar loss value
+      # RCNN_loss_cls  = scalar loss value
+      # RCNN_loss_bbox = scalar loss value
+      # rois_label     = (B, 128)
+
       loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
            + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
       loss_temp += loss.item()

@@ -32,14 +32,14 @@ class _ProposalLayer(nn.Module):
     def __init__(self, feat_stride, scales, ratios):
         super(_ProposalLayer, self).__init__()
 
-        self._feat_stride = feat_stride # 16
+        self._feat_stride = feat_stride # ! 16
 
-        # anchor box 생성
+        # ! anchor box 생성
         self._anchors = torch.from_numpy(generate_anchors(scales=np.array(scales),
             ratios=np.array(ratios))).float()
-        # self._anchors = (9, 4) -> 서로 다른 aspect ratio, 서로 다른 scale의 anchor boxes에 대한 좌표 (x1, y1, x2, y2)
+        # ! self._anchors = (9, 4) -> 서로 다른 aspect ratio, 서로 다른 scale의 anchor boxes에 대한 좌표 (x1, y1, x2, y2)
 
-        self._num_anchors = self._anchors.size(0) # 9
+        self._num_anchors = self._anchors.size(0) # ! 9
 
         # rois blob: holds R regions of interest, each is a 5-tuple
         # (n, x1, y1, x2, y2) specifying an image batch index n and a
@@ -69,51 +69,56 @@ class _ProposalLayer(nn.Module):
         # the first set of _num_anchors channels are bg probs
         # the second set are the fg probs
 
-        ## input[0] = rpn_cls_prob  = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
-        ## input[1] = rpn_bbox_pred = (B, 36, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 bbox offset 예측값
-        ## input[2] = im_info       = (B, 3)
-        ## input[3] = cfg_key       = 'TRAIN'
-        scores = input[0][:, self._num_anchors:, :, :] # fg scores만을 추출 = (B, 9, 37, 37)
+        # ! input[0] = rpn_cls_prob  = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
+        # ! input[1] = rpn_bbox_pred = (B, 36, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 bbox offset 예측값
+        # ! input[2] = im_info       = (B, 3)
+        # ! input[3] = cfg_key       = 'TRAIN'
+
+        scores = input[0][:, self._num_anchors:, :, :] # ! 전체 cls scores 중 fg scores만을 추출 = (B, 9, 37, 37)
         bbox_deltas = input[1]
         im_info = input[2]
         cfg_key = input[3]
 
-        pre_nms_topN  = cfg[cfg_key].RPN_PRE_NMS_TOP_N  # 12000
-        post_nms_topN = cfg[cfg_key].RPN_POST_NMS_TOP_N # 2000
-        nms_thresh    = cfg[cfg_key].RPN_NMS_THRESH     # 0.7
-        min_size      = cfg[cfg_key].RPN_MIN_SIZE       # 8
+        pre_nms_topN  = cfg[cfg_key].RPN_PRE_NMS_TOP_N  # ! 12000
+        post_nms_topN = cfg[cfg_key].RPN_POST_NMS_TOP_N # ! 2000
+        nms_thresh    = cfg[cfg_key].RPN_NMS_THRESH     # ! 0.7
+        min_size      = cfg[cfg_key].RPN_MIN_SIZE       # ! 8
 
-        batch_size = bbox_deltas.size(0) # B
+        batch_size = bbox_deltas.size(0) # ! B
 
-        feat_height, feat_width = scores.size(2), scores.size(3) # 37, 37
+        feat_height, feat_width = scores.size(2), scores.size(3) # ! 37, 37
 
-        # feature map의 각 좌표를 원본 이미지 상의 좌표로 변환
-        shift_x = np.arange(0, feat_width) * self._feat_stride  # [0, 1, 2, ..., 37] * 16 -> [0, 16, 32, ..., 576] (37,)
-        shift_y = np.arange(0, feat_height) * self._feat_stride # [0, 1, 2, ..., 37] * 16 -> [0, 16, 32, ..., 576] (37,)
-        shift_x, shift_y = np.meshgrid(shift_x, shift_y) # 그리드 좌표로 변환 // shape = (37,37), (37,37)
+        # ! feature map의 각 좌표를 원본 이미지 상의 좌표로 변환
+        shift_x = np.arange(0, feat_width) * self._feat_stride  # ! [0, 1, 2, ..., 37] * 16 -> [0, 16, 32, ..., 576] (37,)
+        shift_y = np.arange(0, feat_height) * self._feat_stride # ! [0, 1, 2, ..., 37] * 16 -> [0, 16, 32, ..., 576] (37,)
 
-        # bbox 형식으로 변환 -> [[x1, y1, x2, y2], ...]
-        # 이때 x1=x2, y1=y2임 (특정 position을 의미하므로)
+        # ! 그리드 좌표로 변환
+        shift_x, shift_y = np.meshgrid(shift_x, shift_y) # ! (37,37), (37,37)
+
+        # ! bbox 형식으로 변환 -> [[x1, y1, x2, y2], ...]
+        # ! 이때 x1=x2, y1=y2임 (특정 position을 의미하므로)
         shifts = torch.from_numpy(np.vstack((shift_x.ravel(), shift_y.ravel(),
                                   shift_x.ravel(), shift_y.ravel())).transpose())
-        # shifts = (1369, 4)
         shifts = shifts.contiguous().type_as(scores).float()
+        # ! shifts = (1369, 4)
 
-        A = self._num_anchors # 9
-        K = shifts.size(0)    # 37 * 37 = 1369
+        A = self._num_anchors # ! 9
+        K = shifts.size(0) # ! 37 * 37 = 1369
 
         self._anchors = self._anchors.type_as(scores)
 
-        # self._anchors = (9, 4), self._anchors.view(1, A, 4) = (1, 9, 4)
-        # shifts = (1369, 4), shifts.view(K, 1, 4) = (1369, 1, 4)
-        # broadcasting: anchors = (1, 9, 4) + (1369, 1, 4) = (1369, 9, 4)
-        # 1369(37x37)의 모든 reference positions 상에서 9개의 anchor boxes를 정의함
-        # 즉, anchors는 모든 reference positions 상에서 9개의 anchor boxes 좌표를 담고 있음 (1369, 9, 4)
+        # ! 1369(37x37)의 모든 reference positions 상에서 9개의 anchor boxes를 정의함
+        # ! 즉, anchors는 모든 reference positions 상에서 9개의 anchor boxes 좌표를 담고 있음 (1369, 9, 4)
         anchors = self._anchors.view(1, A, 4) + shifts.view(K, 1, 4)
+        # ! self._anchors = (9, 4)
+        # ! self._anchors.view(1, A, 4) = (1, 9, 4)
+        # ! shifts = (1369, 4)
+        # ! shifts.view(K, 1, 4) = (1369, 1, 4)
+        # ! broadcasting: anchors = (1, 9, 4) + (1369, 1, 4) = (1369, 9, 4)
 
-        # reshape하고 batch size만큼 확장
+        # ! reshape하고 batch size만큼 확장
         anchors = anchors.view(1, K * A, 4).expand(batch_size, K * A, 4)
-        # anchors = (B, 12321, 4)
+        # ! anchors = (B, 12321, 4)
 
         # Transpose and reshape predicted bbox transformations to get them
         # into the ***same order as the anchors***:

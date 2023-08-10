@@ -19,32 +19,36 @@ class _RPN(nn.Module):
     def __init__(self, din):
         super(_RPN, self).__init__()
         
-        self.din = din  # get depth of input feature map, e.g., 512
-        self.anchor_scales = cfg.ANCHOR_SCALES
-        self.anchor_ratios = cfg.ANCHOR_RATIOS
-        self.feat_stride = cfg.FEAT_STRIDE[0]
+        self.din = din  # ! 512
+        self.anchor_scales = cfg.ANCHOR_SCALES # ! [8,16,32]
+        self.anchor_ratios = cfg.ANCHOR_RATIOS # ! [0.5,1,2]
+        self.feat_stride = cfg.FEAT_STRIDE[0] # ! 16
 
         # define the convrelu layers processing input feature map
+        # ! 초기 convolution을 위한 layer 정의
+        # ! self.RPN_Conv = nn.Conv2d(512, 512, 3, 1, 1, bias=True)
         self.RPN_Conv = nn.Conv2d(self.din, 512, 3, 1, 1, bias=True)
 
         # define bg/fg classifcation score layer
-        self.nc_score_out = len(self.anchor_scales) * len(self.anchor_ratios) * 2 # 2(bg/fg) * 9 (anchors)
+        # ! RPN class prediction (fg/bg) 수행을 위한 layer 정의
+        self.nc_score_out = len(self.anchor_scales) * len(self.anchor_ratios) * 2 # ! 2 (bg/fg) * 9 (anchors) = 18
+        # ! self.RPN_cls_score = nn.Conv2d(512, 18, 1, 1, 0)
         self.RPN_cls_score = nn.Conv2d(512, self.nc_score_out, 1, 1, 0)
 
         # define anchor box offset prediction layer
-        self.nc_bbox_out = len(self.anchor_scales) * len(self.anchor_ratios) * 4 # 4(coords) * 9 (anchors)
+        # ! RPN bbox regression (tx, ty, tw, th) 수행을 위한 layer 정의
+        self.nc_bbox_out = len(self.anchor_scales) * len(self.anchor_ratios) * 4 # ! 4 (coords) * 9 (anchors) = 36
+        # ! self.RPN_bbox_pred = nn.Conv2d(512, 36, 1, 1, 0)
         self.RPN_bbox_pred = nn.Conv2d(512, self.nc_bbox_out, 1, 1, 0)
 
         # define proposal layer
-        # feat_stride   = 16 
-        # anchor_scales = [8,16,32]
-        # anchor_ratios = [0.5,1,2]
+        # ! RPN의 cls, bbox 예측값을 바탕으로 region proposals를 생성하는 layer 정의
+        # ! self.RPN_proposal = _ProposalLayer(16, [8,16,32], [0.5,1,2])
         self.RPN_proposal = _ProposalLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
 
         # define anchor target layer
-        # feat_stride   = 16 
-        # anchor_scales = [8,16,32]
-        # anchor_ratios = [0.5,1,2]
+        # ! RPN의 training target을 생성하는 layer 정의
+        # ! self.RPN_anchor_target = _AnchorTargetLayer(16, [8,16,32], [0.5,1,2])
         self.RPN_anchor_target = _AnchorTargetLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
 
         self.rpn_loss_cls = 0
@@ -62,46 +66,52 @@ class _RPN(nn.Module):
         return x
 
     def forward(self, base_feat, im_info, gt_boxes, num_boxes):
-        # Feature maps를 입력받아 region proposals를 생성함
-        ## base_feat = feature maps from backbone    (B, 512, 37, 37) -> 2D images
-        ## im_info   = image information             (B, 3)           -> (600, 600, ?)
-        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)       -> (x1, y1, x2, y2, ?)
-        ## num_boxes = number of ground-truth bboxes (B,)             -> (#bboxes)
+        
+        # ! Feature maps를 입력받아 region proposals를 생성함
+        # ! base_feat = (B, 512, 37, 37)
+        # ! im_info   = (B, 3)
+        # ! gt_boxes  = (B, 20, 5)
+        # ! num_boxes = (B,)
 
-        batch_size = base_feat.size(0)
+        batch_size = base_feat.size(0) # ! B
 
         # return feature map after convrelu layer
         # base_feat = (B, 512, 37, 37)
+        # ! 초기 convolution 적용 (+ ReLU)
         rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
-        # rpn_conv1 = (B, 512, 37, 37)
+        # ! rpn_conv1 = (B, 512, 37, 37)
 
         # get rpn classification score
+        # ! RPN class prediction 수행
         rpn_cls_score = self.RPN_cls_score(rpn_conv1)
-        # rpn_cls_score = (B, 18, 37, 37)
+        # ! rpn_cls_score = (B, 18, 37, 37)
+
         rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)
-        # rpn_cls_score_reshape = (B, 2, 333, 37)
-        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape, 1) # bg/fg에 대한 softmax
-        # rpn_cls_prob_reshape = (B, 1, 666, 37)
+        # ! rpn_cls_score_reshape = (B, 2, 333, 37)
+
+        rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape, 1) # ! bg/fg에 대한 softmax
+        # ! rpn_cls_prob_reshape = (B, 2, 333, 37)
+
         rpn_cls_prob = self.reshape(rpn_cls_prob_reshape, self.nc_score_out)
-        # rpn_cls_prob = (B, 18, 37, 37)
+        # ! rpn_cls_prob = (B, 18, 37, 37)
 
         # get rpn offsets to the anchor boxes
+        # ! RPN bbox regression 수행
         rpn_bbox_pred = self.RPN_bbox_pred(rpn_conv1)
-        # rpn_bbox_pred = (B, 36, 37, 37)
+        # ! rpn_bbox_pred = (B, 36, 37, 37)
 
         # proposal layer
-        cfg_key = 'TRAIN' if self.training else 'TEST'
+        cfg_key = 'TRAIN' if self.training else 'TEST' # ! training을 가정
 
-        # 예측값을 바탕으로 proposals를 생성
-        # rpn_cls_prob  = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
-        # rpn_bbox_pred = (B, 36, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 bbox offset 예측값
-        # im_info       = (B, 3)
-        # cfg_key       = 'TRAIN'
+        # ! 예측값을 바탕으로 region proposals를 생성
+        # ! rpn_cls_prob  = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
+        # ! rpn_bbox_pred = (B, 36, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 bbox offset 예측값
+        # ! im_info       = (B, 3)
+        # ! cfg_key       = 'TRAIN'
         rois = self.RPN_proposal((rpn_cls_prob.data, rpn_bbox_pred.data,
                                  im_info, cfg_key))
         
-        # rois = (B, 2000, 5)
-        # 2000개의 proposals에 대해 (batch_num, x1, y1, x2, y2)로 구성됨
+        # ! rois = (B, 2000, 5) -> 2000개의 proposals에 대해 (batch_num, x1, y1, x2, y2)로 구성됨
 
         self.rpn_loss_cls = 0
         self.rpn_loss_box = 0

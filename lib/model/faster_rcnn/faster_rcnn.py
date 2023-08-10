@@ -24,44 +24,58 @@ class _fasterRCNN(nn.Module):
     def __init__(self, classes, class_agnostic):
         super(_fasterRCNN, self).__init__()
         self.classes = classes
-        self.n_classes = len(classes)
+        self.n_classes = len(classes) # ! 21 (20 obj + 1 bg)
         self.class_agnostic = class_agnostic
         # loss
         self.RCNN_loss_cls = 0
         self.RCNN_loss_bbox = 0
 
-        # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model) # self.dout_base_model = 512
-        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes) # 21 (20 category + 1 bg)
+        # ! RPN 정의
+        # ! self.RCNN_rpn = _RPN(512)
+        self.RCNN_rpn = _RPN(self.dout_base_model)
 
-        # cfg.POOLING_SIZE = 7
+        # ! Faster R-CNN의 training target을 생성하는 layer 정의
+        # ! self.RCNN_proposal_target = _ProposalTargetLayer(21)
+        self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
+
+        # ! proposals feature 추출을 위한 RoI Pooling, RoI Align layer 정의
+        # ! cfg.POOLING_SIZE = 7
+        # ! self.RCNN_roi_pool = ROIPool((7, 7), 1.0/16.0)
         self.RCNN_roi_pool = ROIPool((cfg.POOLING_SIZE, cfg.POOLING_SIZE), 1.0/16.0)
+        # ! self.RCNN_roi_align = ROIAlign((7, 7), 1.0/16.0, 0)
         self.RCNN_roi_align = ROIAlign((cfg.POOLING_SIZE, cfg.POOLING_SIZE), 1.0/16.0, 0)
 
     def forward(self, im_data, im_info, gt_boxes, num_boxes):
-        batch_size = im_data.size(0)
 
-        # 참고: checker.ipynb
-        ## im_data   = input image                   (B, 3, H, W) -> 2D images
-        ## im_info   = image information             (B, 3)       -> (h, w, ?)
-        ## gt_boxes  = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, class_label)
-        ## num_boxes = number of ground-truth bboxes (B,)         -> (#bboxes)
+        # ! im_data   = input image                   (B, 3, H, W) -> 2D images
+        # ! im_info   = image information             (B, 3)       -> (h, w, scale)
+        # ! gt_boxes  = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, obj_class)
+        # ! num_boxes = number of ground-truth bboxes (B,)         -> (#bboxes)
+
+        batch_size = im_data.size(0) # ! B
 
         im_info = im_info.data
         gt_boxes = gt_boxes.data
         num_boxes = num_boxes.data
 
         # feed image data to base model to obtain base feature map
-        # im_data: (B, 3, 600, 600)
-        ## 입력 resolution이 (600, 600)이라고 가정함
+        # ! VGG backbone으로부터 feature maps 추출
+        # ! 이때 입력 resolution이 (600, 600)이라고 가정함
+        # ! VGG-16 backbone의 경우 입력 이미지의 resoultion은 대략 16배 감소함
+        # ! im_data = (B, 3, 600, 600)
         base_feat = self.RCNN_base(im_data)
-        # base_feat: (B, 512, 37, 37)
+        # ! base_feat = (B, 512, 37, 37)
 
-        # feed base feature map tp RPN to obtain rois
+        # ! Feature maps를 RPN에 입력하여 region proposals(= rois)를 생성함
+        # ! RPN의 cls_loss, bbox_loss도 계산함
+        # ! base_feat = (B, 512, 37, 37)
+        # ! im_info   = (B, 3)
+        # ! gt_boxes  = (B, 20, 5)
+        # ! num_boxes = (B,)
         rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
-        # rois          = (B, 2000, 5) -> 2000개의 proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
-        # rpn_loss_cls  = scalar value -> RPN의 cls_loss
-        # rpn_loss_bbox = scalar value -> RPN의 bbox_loss
+        # ! rois          = (B, 2000, 5) -> 2000개의 region proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
+        # ! rpn_loss_cls  = scalar loss value -> RPN의 cls_loss
+        # ! rpn_loss_bbox = scalar loss value -> RPN의 bbox_loss
 
         # if it is training phrase, then use ground trubut bboxes for refining
         if self.training:

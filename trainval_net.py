@@ -233,8 +233,9 @@ if __name__ == '__main__':
   if args.cuda:
     cfg.CUDA = True
 
-  # initilize the network here.
-  # 본 리뷰에서는 VGG-16을 사용한다고 가정함
+  # TODO: 리뷰 시작
+  # ! initilize the network here.
+  # ! 본 리뷰에서는 VGG-16을 사용한다고 가정함
   if args.net == 'vgg16':
     fasterRCNN = vgg16(imdb.classes, pretrained=True, class_agnostic=args.class_agnostic)
   elif args.net == 'res101':
@@ -309,11 +310,12 @@ if __name__ == '__main__':
     data_iter = iter(dataloader)
     for step in range(iters_per_epoch):
       data = next(data_iter)
-      # 참고: checker.ipynb
-      ## data[0] = input image                   (B, 3, H, W) -> 2D images
-      ## data[1] = image information             (B, 3)       -> (h, w, ?)
-      ## data[2] = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, ?)
-      ## data[3] = number of ground-truth bboxes (B,)         -> (#bboxes)
+
+      # ! data[0] = input image                   (B, 3, H, W) -> 2D images
+      # ! data[1] = image information             (B, 3)       -> (h, w, scale)
+      # ! data[2] = ground-truth bboxes           (B, 20, 5)   -> (x1, y1, x2, y2, obj_class)
+      # ! data[3] = number of ground-truth bboxes (B,)         -> (#bboxes)
+
       with torch.no_grad():
               im_data.resize_(data[0].size()).copy_(data[0])
               im_info.resize_(data[1].size()).copy_(data[1])
@@ -321,19 +323,22 @@ if __name__ == '__main__':
               num_boxes.resize_(data[3].size()).copy_(data[3])
 
       fasterRCNN.zero_grad()
+
+      # ! Faster R-CNN에 데이터 입력
       rois, cls_prob, bbox_pred, \
       rpn_loss_cls, rpn_loss_box, \
       RCNN_loss_cls, RCNN_loss_bbox, \
       rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
+      # ! rois           = (B, 128, 5)
+      # ! cls_prob       = (B, 128, 21)
+      # ! bbox_pred      = (B, 128, 4)
+      # ! rpn_loss_cls   = scalar loss value
+      # ! rpn_loss_box   = scalar loss value
+      # ! RCNN_loss_cls  = scalar loss value
+      # ! RCNN_loss_bbox = scalar loss value
+      # ! rois_label     = (B, 128)
 
-      # rois           = (B, 128, 5)
-      # cls_prob       = (B, 128, 21)
-      # bbox_pred      = (B, 128, 4)
-      # rpn_loss_cls   = scalar loss value
-      # rpn_loss_box   = scalar loss value
-      # RCNN_loss_cls  = scalar loss value
-      # RCNN_loss_bbox = scalar loss value
-      # rois_label     = (B, 128)
+      # ! 이하 생략
 
       loss = rpn_loss_cls.mean() + rpn_loss_box.mean() \
            + RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()

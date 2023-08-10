@@ -34,33 +34,34 @@ class vgg16(_fasterRCNN):
 
     vgg.classifier = nn.Sequential(*list(vgg.classifier._modules.values())[:-1])
 
-    # not using the last maxpool layer
+    # ! VGG-16 backbone은 마지막 max_pool 전까지만 사용함
     self.RCNN_base = nn.Sequential(*list(vgg.features._modules.values())[:-1])
 
     # Fix the layers before conv3:
     for layer in range(10):
       for p in self.RCNN_base[layer].parameters(): p.requires_grad = False
 
-    # self.RCNN_base = _RCNN_base(vgg.features, self.classes, self.dout_base_model)
+    # ! Fast R-CNN detection head 정의
+    # ! 우선 RPN의 출력 features를 4096차원으로 매핑
+    self.RCNN_top = vgg.classifier # ! 25088 -> 4096
 
-    self.RCNN_top = vgg.classifier # 25088 -> 4096
+    # ! Classification head는 feature vectors로부터 class prediction 수행
+    self.RCNN_cls_score = nn.Linear(4096, self.n_classes) # ! 4096 -> 21
 
-    # not using the last maxpool layer
-    self.RCNN_cls_score = nn.Linear(4096, self.n_classes) # 4096 -> 21
-
-    if self.class_agnostic:
-      self.RCNN_bbox_pred = nn.Linear(4096, 4) # 4096 -> 4
+    # ! Regression head는 feature vectors로부터 bbox regression 수행
+    if self.class_agnostic: # ! True
+      self.RCNN_bbox_pred = nn.Linear(4096, 4) # ! 4096 -> 4
     else:
       self.RCNN_bbox_pred = nn.Linear(4096, 4 * self.n_classes)     
 
   def _head_to_tail(self, pool5):
     
-    # pool5 = (128B, 512, 7, 7)
+    # ! pool5 = (128B, 512, 7, 7)
 
-    pool5_flat = pool5.view(pool5.size(0), -1) # (128B, 25088)
-    fc7 = self.RCNN_top(pool5_flat) # (128B, 4096)
+    pool5_flat = pool5.view(pool5.size(0), -1) # ! (128B, 25088)
+    fc7 = self.RCNN_top(pool5_flat) # ! (128B, 4096)
 
-    # fc7 = (128B, 4096)
+    # ! fc7 = (128B, 4096)
 
     return fc7
 

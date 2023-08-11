@@ -2,7 +2,7 @@
 
 ## Abour Repository
 
-Repository for Faster R-CNN code review.
+🔥 Repository for Faster R-CNN code review.
 
 To see my review comments, you need to add the ***Better Comments*** extension in VS Code.
 

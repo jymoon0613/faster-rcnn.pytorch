@@ -1,5 +1,13 @@
 # A *Faster* Pytorch Implementation of Faster R-CNN
 
+## Abour Repository
+
+Repository for Faster R-CNN code review
+
+To see review comments, you need to add the ***better comments*** extension in VS Code.
+
+The README for the original repository is below:
+
 ## Introduction
 
 ### Good news! This repo supports pytorch-1.0 now!!! We borrowed some code and techniques from [maskrcnn-benchmark](https://github.com/facebookresearch/maskrcnn-benchmark).

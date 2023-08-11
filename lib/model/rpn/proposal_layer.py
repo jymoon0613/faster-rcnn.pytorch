@@ -205,7 +205,7 @@ class _ProposalLayer(nn.Module):
             # ! 현재 예시에서 n은 2000보다 크다고 가정함
             if post_nms_topN > 0:
                 # ! 상위 2000개 proposals의 indices
-                keep_idx_i = keep_idx_i[:post_nms_topN] # ! (2000, # 상위 2000개 proposals
+                keep_idx_i = keep_idx_i[:post_nms_topN] # ! (2000, )
             # ! 상위 2000개 proposals
             proposals_single = proposals_single[keep_idx_i, :] # ! (2000, 4)
             # ! 상위 2000개 objectness score

@@ -1,6 +1,6 @@
 # A *Faster* Pytorch Implementation of Faster R-CNN
 
-## Abour Repository
+## About Repository
 
 🔥 Repository for Faster R-CNN code review.
 

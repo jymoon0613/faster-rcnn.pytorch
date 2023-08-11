@@ -329,14 +329,14 @@ if __name__ == '__main__':
       rpn_loss_cls, rpn_loss_box, \
       RCNN_loss_cls, RCNN_loss_bbox, \
       rois_label = fasterRCNN(im_data, im_info, gt_boxes, num_boxes)
-      # ! rois           = (B, 128, 5)
-      # ! cls_prob       = (B, 128, 21)
-      # ! bbox_pred      = (B, 128, 4)
-      # ! rpn_loss_cls   = scalar loss value
-      # ! rpn_loss_box   = scalar loss value
-      # ! RCNN_loss_cls  = scalar loss value
-      # ! RCNN_loss_bbox = scalar loss value
-      # ! rois_label     = (B, 128)
+      # ! rois           = (B, 128, 5)       -> 최종적으로 선택된 rois
+      # ! cls_prob       = (B, 128, 21)      -> detection head의 class 예측값
+      # ! bbox_pred      = (B, 128, 4)       -> detection head의 bbox offset 예측값
+      # ! rpn_loss_cls   = scalar loss value -> RPN의 cls_loss 값
+      # ! rpn_loss_box   = scalar loss value -> RPN의 bbox_reg_loss 값
+      # ! RCNN_loss_cls  = scalar loss value -> detection head의 cls_loss 값
+      # ! RCNN_loss_bbox = scalar loss value -> detection head의 bbox_reg_loss 값
+      # ! rois_label     = (B, 128)          -> rois에 대한 gt_cls_labels
 
       # ! 이하 생략
 

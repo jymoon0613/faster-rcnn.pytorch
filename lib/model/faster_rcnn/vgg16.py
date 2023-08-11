@@ -49,10 +49,10 @@ class vgg16(_fasterRCNN):
     self.RCNN_cls_score = nn.Linear(4096, self.n_classes) # ! 4096 -> 21
 
     # ! Regression head는 feature vectors로부터 bbox regression 수행
-    if self.class_agnostic: # ! True
-      self.RCNN_bbox_pred = nn.Linear(4096, 4) # ! 4096 -> 4
+    if self.class_agnostic: # ! False
+      self.RCNN_bbox_pred = nn.Linear(4096, 4) 
     else:
-      self.RCNN_bbox_pred = nn.Linear(4096, 4 * self.n_classes)     
+      self.RCNN_bbox_pred = nn.Linear(4096, 4 * self.n_classes) # ! 4096 -> 4 * 21 = 84 
 
   def _head_to_tail(self, pool5):
     

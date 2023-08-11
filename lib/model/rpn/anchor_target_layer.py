@@ -121,13 +121,15 @@ class _AnchorTargetLayer(nn.Module):
         labels = gt_boxes.new(batch_size, inds_inside.size(0)).fill_(-1)
 
         # ! bbox_inside_weights 정의 (B, n) (0으로 채움)
+        # ! bbox_reg loss = bbox_outside_weights * smooth_l1(<bbox_inside_weights> * bbox_diff)
         # ! bbox_reg loss는 positive samples에 대해서만 정의되며 이를 반영하기 위한 weights임
         # ! 즉, weight = 1이면 positive sample로 bbox_reg_loss 계산을 수행하고, 0이면 negative sample로서 수행하지 않음
         bbox_inside_weights = gt_boxes.new(batch_size, inds_inside.size(0)).zero_()
 
         # ! bbox_outside_weights 정의 (B, n) (0으로 채움)
-        # ! 마찬가지로 bbox_outsize_weights은 neagative samples에 대한 bbox_reg_loss를 결정
-        # ! 본 예시에서는 negative samples에 대한 bbox_reg loss를 사용하지 않음
+        # ! bbox_reg loss = <bbox_outside_weights> * smooth_l1(bbox_inside_weights * bbox_diff)
+        # ! bbox samples 수에 따라 RPN bbox_reg loss의 비율을 조정하기 위한 weights
+        # ! 혹은 bbox_reg targets (tx, ty, tw, tw) 별로 loss 가중치를 별도로 설정하기 위한 목적으로도 사용될 수 있음
         bbox_outside_weights = gt_boxes.new(batch_size, inds_inside.size(0)).zero_()
 
         # ! 먼저, n개의 anchor boxes와 모든 gt_boxes 간의 IoU를 계산
@@ -153,10 +155,10 @@ class _AnchorTargetLayer(nn.Module):
         # ! 하지만, 하나의 anchor box에 대해 IoU가 max인 gt_box가 여러 개일 수도 있음 
         # ! 이를 식별하기 위해 각 anchor box에 대해 IoU가 가장 크면서 같은 anchor boxes를 모두 식별
         gt_max_overlaps[gt_max_overlaps==0] = 1e-5
-        # ! n 개의 anchor box 각각에 대해 할당된 gt_boxes의 개수 계산
+        # ! n개의 anchor box 각각에 대해 할당된 gt_boxes의 개수 계산
         keep = torch.sum(overlaps.eq(gt_max_overlaps.view(batch_size,1,-1).expand_as(overlaps)), 2) # ! (B, n)
 
-        # ! 
+        # ! 할당된 gt_boxes의 수가 1개 이상인 경우 positive sample로 사용함
         if torch.sum(keep) > 0:
             labels[keep>0] = 1
 
@@ -170,6 +172,7 @@ class _AnchorTargetLayer(nn.Module):
         # ! 한 batch 내에서 positive/negative samples의 비율을 조정
         # ! cfg.RPN_FG_FRACTION = 0.5
         # ! cfg.TRAIN.RPN_BATCHSIZE = 256
+        # ! positive samples, negative samples 모두 최대 128개를 넘을 수 없음
         num_fg = int(cfg.TRAIN.RPN_FG_FRACTION * cfg.TRAIN.RPN_BATCHSIZE) # ! 0.5 * 256 = 128
 
         sum_fg = torch.sum((labels == 1).int(), 1) # ! fg의 개수 (B,)
@@ -193,7 +196,7 @@ class _AnchorTargetLayer(nn.Module):
                 labels[i][disable_inds] = -1
 
 #           num_bg = cfg.TRAIN.RPN_BATCHSIZE - sum_fg[i]
-            # ! bg의 개수 식별 = 전체 batch size - fg의 개수
+            # ! bg의 개수 식별 = RPN batch size - fg의 개수
             num_bg = cfg.TRAIN.RPN_BATCHSIZE - torch.sum((labels == 1).int(), 1)[i]
 
             # subsample negative labels if we have too many
@@ -207,78 +210,87 @@ class _AnchorTargetLayer(nn.Module):
                 labels[i][disable_inds] = -1
 
         # ! batch size offset 지정
-        offset = torch.arange(0, batch_size)*gt_boxes.size(1) # ! [0, 1, ..., B] * 20 = [0, 20, ..., 20B]
+        offset = torch.arange(0, batch_size)*gt_boxes.size(1) # ! [0, 1, ..., B-1] * 20 = [0, 20, ..., 20(B-1)]
+        # ! offset = (B,)
 
         # ! bbox reg 예측 타겟 (tx*, ty*, tw*, th*) 생성
         # ! offset 적용 (B, n)
-        argmax_overlaps = argmax_overlaps + offset.view(batch_size, 1).type_as(argmax_overlaps) 
-        
+        argmax_overlaps = argmax_overlaps + offset.view(batch_size, 1).type_as(argmax_overlaps) # ! (B, n) + (B, 1)
+        # ! argmax_overlaps = (B, n)
+
         # ! anchors = (n, 4)
-        # ! gt_boxes.view(-1,5) = (20B, 5)
-        # ! gt_boxes.view(-1,5)[argmax_overlaps.view(-1), :] = (Bn, 5)
+        # ! gt_boxes.view(-1,5) = (20B, 5) -> gt_boxes를 flatten함
+        # ! gt_boxes.view(-1,5)[argmax_overlaps.view(-1), :] = (Bn, 5) -> 전체 gt_boxes 중 n개의 anchor boxes 각각에 할당된 gt_box만 고려함
         # ! gt_boxes.view(-1,5)[argmax_overlaps.view(-1), :].view(batch_size, -1, 5) = (B, n, 5)
         bbox_targets = _compute_targets_batch(anchors, gt_boxes.view(-1,5)[argmax_overlaps.view(-1), :].view(batch_size, -1, 5))
-        # ! bbox_targets = (B, n, 4)
+        # ! bbox_targets = (B, n, 4) -> 각 batch 내에 존재하는 n개의 anchor boxes에 대해 각 anchor box와 매칭된 gt_box와 계산된 gt_bbox targets
 
         # use a single value instead of 4 values for easy index.
-        # positive smaple에 대한 가중치 설정
-        # cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
-        bbox_inside_weights[labels==1] = cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS[0] # (B, n)
+        # ! positive sample에 대한 가중치 설정
+        # ! cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
+        # ! positive sample인 경우 bbox_reg loss를 계산하므로 weight를 1로 설정
+        bbox_inside_weights[labels==1] = cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS[0] # ! (B, n)
 
-        # cfg.TRAIN.RPN_POSITIVE_WEIGHT = -1
+        # ! cfg.TRAIN.RPN_POSITIVE_WEIGHT = -1
         if cfg.TRAIN.RPN_POSITIVE_WEIGHT < 0:
+            # ! positive/negative samples의 수를 계산 (label=-1 제외)
             num_examples = torch.sum(labels[i] >= 0)
+            # ! bbox_outside_weights에서 사용할 positive_weights와 negative_weights를 정의
             positive_weights = 1.0 / num_examples.item()
             negative_weights = 1.0 / num_examples.item()
         else:
             assert ((cfg.TRAIN.RPN_POSITIVE_WEIGHT > 0) &
                     (cfg.TRAIN.RPN_POSITIVE_WEIGHT < 1))
 
-        bbox_outside_weights[labels == 1] = positive_weights # (B, n)
-        bbox_outside_weights[labels == 0] = negative_weights # (B, n)
+        # ! bbox_outside_weights의 경우 bbox_reg loss는 전체 가능한 positive + negative samples의 수에 따라 scaling됨
+        # ! 4개의 bbox_reg targets (tx, ty, tw, tw)도 동일한 가중치가 할당됨
+        bbox_outside_weights[labels == 1] = positive_weights # ! (B, n)
+        bbox_outside_weights[labels == 0] = negative_weights # ! (B, n)
         
-        # total_anchors        = 12321
-        # ind_insize           = (n,)
-        # labels               = (B, n)
-        # bbox_targets         = (B, n, 4)
-        # bbox_inside_weights  = (B, n)
-        # bbox_outside_weights = (B, n)
+        # ! 유효한 anchors에 대해서만 처리된 결과를 전체 anchors로 확장하여 저장
+        # ! 불필요한 anchors에 대한 처리가 필요
+        # ! total_anchors        = 12321
+        # ! ind_insize           = (n,)
+        # ! labels               = (B, n)
+        # ! bbox_targets         = (B, n, 4)
+        # ! bbox_inside_weights  = (B, n)
+        # ! bbox_outside_weights = (B, n)
         labels = _unmap(labels, total_anchors, inds_inside, batch_size, fill=-1)
         bbox_targets = _unmap(bbox_targets, total_anchors, inds_inside, batch_size, fill=0)
         bbox_inside_weights = _unmap(bbox_inside_weights, total_anchors, inds_inside, batch_size, fill=0)
         bbox_outside_weights = _unmap(bbox_outside_weights, total_anchors, inds_inside, batch_size, fill=0)
-        # labels               = (B, 12321)     -> 이때 선택된 n개의 anchors에 대해서만 labels 부여하고 나머지는 -1로 할당하여 고려하지 않음
-        # bbox_targets         = (B, 12321, 4)  -> 이때 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
-        # bbox_inside_weights  = (B, 12321)     -> 이때 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
-        # bbox_outside_weights = (B, 12321)     -> 이때 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
-        # 이때 선택된 n개의 anchors에 대해서만 labels 부여하고 나머지는 -1로 할당하여 고려하지 않음
+        # ! labels               = (B, 12321)    -> 선택된 n개의 anchors에 대해서만 labels 부여하고 나머지는 -1로 할당하여 고려하지 않음
+        # ! bbox_targets         = (B, 12321, 4) -> 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
+        # ! bbox_inside_weights  = (B, 12321)    -> 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
+        # ! bbox_outside_weights = (B, 12321)    -> 선택된 n개의 anchors에 대해서만 bbox_targets를 사용하고 부여하고 나머지는 0으로 할당하여 고려하지 않음
 
+        # ! 처리 결과를 최종 저장
         outputs = []
 
-        labels = labels.view(batch_size, height, width, A).permute(0,3,1,2).contiguous() # (B, 9, 37, 37)
-        labels = labels.view(batch_size, 1, A * height, width) # (B, 1, 333, 37)
+        labels = labels.view(batch_size, height, width, A).permute(0,3,1,2).contiguous() # ! (B, 9, 37, 37)
+        labels = labels.view(batch_size, 1, A * height, width) # ! (B, 1, 333, 37)
         outputs.append(labels)
 
-        bbox_targets = bbox_targets.view(batch_size, height, width, A*4).permute(0,3,1,2).contiguous() # (B, 36, 37, 37)
+        bbox_targets = bbox_targets.view(batch_size, height, width, A*4).permute(0,3,1,2).contiguous() # ! (B, 36, 37, 37)
         outputs.append(bbox_targets)
 
-        anchors_count = bbox_inside_weights.size(1) # 12321
-        bbox_inside_weights = bbox_inside_weights.view(batch_size,anchors_count,1).expand(batch_size, anchors_count, 4) # (B, 12321, 4)
+        anchors_count = bbox_inside_weights.size(1) # ! 12321
+        bbox_inside_weights = bbox_inside_weights.view(batch_size,anchors_count,1).expand(batch_size, anchors_count, 4) # ! (B, 12321, 4)
 
         bbox_inside_weights = bbox_inside_weights.contiguous().view(batch_size, height, width, 4*A)\
-                            .permute(0,3,1,2).contiguous() # (B, 36, 37, 37)
+                            .permute(0,3,1,2).contiguous() # ! (B, 36, 37, 37)
 
         outputs.append(bbox_inside_weights)
 
-        bbox_outside_weights = bbox_outside_weights.view(batch_size,anchors_count,1).expand(batch_size, anchors_count, 4) # (B, 12321, 4)
+        bbox_outside_weights = bbox_outside_weights.view(batch_size,anchors_count,1).expand(batch_size, anchors_count, 4) # ! (B, 12321, 4)
         bbox_outside_weights = bbox_outside_weights.contiguous().view(batch_size, height, width, 4*A)\
-                            .permute(0,3,1,2).contiguous() # (B, 36, 37, 37)
+                            .permute(0,3,1,2).contiguous() # ! (B, 36, 37, 37)
         outputs.append(bbox_outside_weights)
 
-        # output[0] = labels               (B, 1, 333, 37)
-        # output[1] = bbox_targets         (B, 36, 37, 37)
-        # output[2] = bbox_inside_weights  (B, 36, 37, 37)
-        # output[3] = bbox_outside_weights (B, 36, 37, 37)
+        # ! output[0] = labels               (B, 1, 333, 37)
+        # ! output[1] = bbox_targets         (B, 36, 37, 37)
+        # ! output[2] = bbox_inside_weights  (B, 36, 37, 37)
+        # ! output[3] = bbox_outside_weights (B, 36, 37, 37)
 
         return outputs
 

@@ -70,28 +70,41 @@ def save_checkpoint(state, filename):
 
 def _smooth_l1_loss(bbox_pred, bbox_targets, bbox_inside_weights, bbox_outside_weights, sigma=1.0, dim=[1]):
 
-    # bbox_pred            = (B, 36, 37, 37)
-    # bbox_targets         = (B, 36, 37, 37)
-    # bbox_inside_weights  = (B, 36, 37, 37)
-    # bbox_outside_weights = (B, 36, 37, 37)
-    # sigma                = 3.0
-    # dim                  = [1,2,3]  
+    # ! bbox_reg loss 계산
+    # ! bbox_pred            = (B, 36, 37, 37)
+    # ! bbox_targets         = (B, 36, 37, 37)
+    # ! bbox_inside_weights  = (B, 36, 37, 37)
+    # ! bbox_outside_weights = (B, 36, 37, 37)
+    # ! sigma                = 3.0
+    # ! dim                  = [1,2,3]  
 
-    sigma_2 = sigma ** 2 # 9
-    box_diff = bbox_pred - bbox_targets # (B, 36, 37, 37)
-    in_box_diff = bbox_inside_weights * box_diff # (B, 36, 37, 37)
-    abs_in_box_diff = torch.abs(in_box_diff) # (B, 36, 37, 37)
-    smoothL1_sign = (abs_in_box_diff < 1. / sigma_2).detach().float() # (B, 36, 37, 37)
+    sigma_2 = sigma ** 2 # ! 9
+
+    # ! RPN 예측값과 gt_box targets의 차이 계산
+    box_diff = bbox_pred - bbox_targets # ! (B, 36, 37, 37)
+
+    # ! bbox_inside_weights 적용
+    # ! positive samples의 경우 box_diff 값을 유지하며, negative sample이거나 고려하지 않는 anchors(-1)의 경우 0으로 마스킹됨
+    in_box_diff = bbox_inside_weights * box_diff # ! (B, 36, 37, 37)
+
+    # ! smooth_l1_loss 계산
+    abs_in_box_diff = torch.abs(in_box_diff) # ! (B, 36, 37, 37)
+    smoothL1_sign = (abs_in_box_diff < 1. / sigma_2).detach().float() # ! (B, 36, 37, 37)
     in_loss_box = torch.pow(in_box_diff, 2) * (sigma_2 / 2.) * smoothL1_sign \
-                  + (abs_in_box_diff - (0.5 / sigma_2)) * (1. - smoothL1_sign) # (B, 36, 37, 37)
-    out_loss_box = bbox_outside_weights * in_loss_box # (B, 36, 37, 37)
-    loss_box = out_loss_box # (B, 36, 37, 37)
+                  + (abs_in_box_diff - (0.5 / sigma_2)) * (1. - smoothL1_sign) # ! (B, 36, 37, 37)
+    
+    # ! bbox_outside_weights 적용
+    out_loss_box = bbox_outside_weights * in_loss_box # ! (B, 36, 37, 37)
+
+    # ! 최종 loss output 계산
+    loss_box = out_loss_box # ! (B, 36, 37, 37)
     for i in sorted(dim, reverse=True):
       loss_box = loss_box.sum(i)
-      # (B, 36, 37)
-      # (B, 36)
-      # (B,)
-    loss_box = loss_box.mean() # -> scalar loss value
+      # ! i = 3 -> (B, 36, 37)
+      # ! i = 2 -> (B, 36)
+      # ! i = 1 -> (B,)
+    loss_box = loss_box.mean() # ! -> scalar loss value
+    
     return loss_box
 
 def _crop_pool_layer(bottom, rois, max_pool=True):

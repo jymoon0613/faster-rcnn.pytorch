@@ -35,48 +35,53 @@ def bbox_transform(ex_rois, gt_rois):
 
 def bbox_transform_batch(ex_rois, gt_rois):
 
-    # ex_rois = anchors = (n, 4)
-    # gt_rois = (B, n, 5)
-
-    # 현재 ex_rois.dim() == 2
+    # ! _AnchorTargetLayer
+    # ! ex_rois = anchors = (n, 4) -> 이미지 boundary 내에 존재하는 n개의 anchor boxes
+    # ! gt_rois = (B, n, 5) -> 각 batch 내에 존재하는 n개의 anchor boxes에 대해 각 anchor box와 매칭된 gt_box의 좌표
+    # ! 현재 ex_rois.dim() == 2
     if ex_rois.dim() == 2:
-        ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0          # anchor box의 너비 (n,)
-        ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0         # anchor box의 높이 (n,)
-        ex_ctr_x = ex_rois[:, 0] + 0.5 * ex_widths               # anchor box의 중심좌표 x (n,)
-        ex_ctr_y = ex_rois[:, 1] + 0.5 * ex_heights              # anchor box의 중심좌표 y (n,)
+        ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0          # ! anchor box의 너비 (n,)
+        ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0         # ! anchor box의 높이 (n,)
+        ex_ctr_x = ex_rois[:, 0] + 0.5 * ex_widths               # ! anchor box의 중심좌표 x (n,)
+        ex_ctr_y = ex_rois[:, 1] + 0.5 * ex_heights              # ! anchor box의 중심좌표 y (n,)
 
-        gt_widths = gt_rois[:, :, 2] - gt_rois[:, :, 0] + 1.0    # gt box의 너비 (B, n)
-        gt_heights = gt_rois[:, :, 3] - gt_rois[:, :, 1] + 1.0   # gt box의 높이 (B, n)
-        gt_ctr_x = gt_rois[:, :, 0] + 0.5 * gt_widths            # gt box의 중심좌표 x (B, n)
-        gt_ctr_y = gt_rois[:, :, 1] + 0.5 * gt_heights           # gt box의 중심좌표 y (B, n)
+        gt_widths = gt_rois[:, :, 2] - gt_rois[:, :, 0] + 1.0    # ! gt box의 너비 (B, n)
+        gt_heights = gt_rois[:, :, 3] - gt_rois[:, :, 1] + 1.0   # ! gt box의 높이 (B, n)
+        gt_ctr_x = gt_rois[:, :, 0] + 0.5 * gt_widths            # ! gt box의 중심좌표 x (B, n)
+        gt_ctr_y = gt_rois[:, :, 1] + 0.5 * gt_heights           # ! gt box의 중심좌표 y (B, n)
 
-        targets_dx = (gt_ctr_x - ex_ctr_x.view(1,-1).expand_as(gt_ctr_x)) / ex_widths    # tx* (B, n)
-        targets_dy = (gt_ctr_y - ex_ctr_y.view(1,-1).expand_as(gt_ctr_y)) / ex_heights   # ty* (B, n)
-        targets_dw = torch.log(gt_widths / ex_widths.view(1,-1).expand_as(gt_widths))    # tw* (B, n)
-        targets_dh = torch.log(gt_heights / ex_heights.view(1,-1).expand_as(gt_heights)) # th* (B, n)
+        targets_dx = (gt_ctr_x - ex_ctr_x.view(1,-1).expand_as(gt_ctr_x)) / ex_widths    # ! tx* (B, n)
+        targets_dy = (gt_ctr_y - ex_ctr_y.view(1,-1).expand_as(gt_ctr_y)) / ex_heights   # ! ty* (B, n)
+        targets_dw = torch.log(gt_widths / ex_widths.view(1,-1).expand_as(gt_widths))    # ! tw* (B, n)
+        targets_dh = torch.log(gt_heights / ex_heights.view(1,-1).expand_as(gt_heights)) # ! th* (B, n)
 
+    # ! _ProposalTargetLayer
+    # ! ex_rois    = (B, 128, 4) -> 샘플링된 rois
+    # ! gt_rois    = (B, 128, 4) -> 샘플링된 rois에 대응되는 gt_boxes
+    # ! 현재 ex_rois.dim() == 3
     elif ex_rois.dim() == 3:
-        ex_widths = ex_rois[:, :, 2] - ex_rois[:, :, 0] + 1.0
-        ex_heights = ex_rois[:,:, 3] - ex_rois[:,:, 1] + 1.0
-        ex_ctr_x = ex_rois[:, :, 0] + 0.5 * ex_widths
-        ex_ctr_y = ex_rois[:, :, 1] + 0.5 * ex_heights
+        ex_widths = ex_rois[:, :, 2] - ex_rois[:, :, 0] + 1.0  # ! rois의 너비 (B, 128)
+        ex_heights = ex_rois[:,:, 3] - ex_rois[:, :, 1] + 1.0  # ! rois의 높이 (B, 128)
+        ex_ctr_x = ex_rois[:, :, 0] + 0.5 * ex_widths          # ! rois의 중심좌표 x (B, 128)
+        ex_ctr_y = ex_rois[:, :, 1] + 0.5 * ex_heights         # ! rois의 중심좌표 y (B, 128)
 
-        gt_widths = gt_rois[:, :, 2] - gt_rois[:, :, 0] + 1.0
-        gt_heights = gt_rois[:, :, 3] - gt_rois[:, :, 1] + 1.0
-        gt_ctr_x = gt_rois[:, :, 0] + 0.5 * gt_widths
-        gt_ctr_y = gt_rois[:, :, 1] + 0.5 * gt_heights
+        gt_widths = gt_rois[:, :, 2] - gt_rois[:, :, 0] + 1.0  # ! gt box의 너비 (B, 128)
+        gt_heights = gt_rois[:, :, 3] - gt_rois[:, :, 1] + 1.0 # ! gt box의 높이 (B, 128)
+        gt_ctr_x = gt_rois[:, :, 0] + 0.5 * gt_widths          # ! gt box의 중심좌표 x (B, 128)
+        gt_ctr_y = gt_rois[:, :, 1] + 0.5 * gt_heights         # ! gt box의 중심좌표 y (B, 128)
 
-        targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths
-        targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights
-        targets_dw = torch.log(gt_widths / ex_widths)
-        targets_dh = torch.log(gt_heights / ex_heights)
+        targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths  # ! tx* (B, 128)
+        targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights # ! ty* (B, 128)
+        targets_dw = torch.log(gt_widths / ex_widths)   # ! tw* (B, 128)
+        targets_dh = torch.log(gt_heights / ex_heights) # ! th* (B, 128)
     else:
         raise ValueError('ex_roi input dimension is not correct.')
 
     targets = torch.stack(
         (targets_dx, targets_dy, targets_dw, targets_dh),2)
     
-    # targets = (B, n, 4)
+    # ! _AnchorTargetLayer   -> targets = (B, n, 4)
+    # ! _ProposalTargetLayer -> targets = (B, 128, 4)
 
     return targets
 
@@ -278,70 +283,71 @@ def bbox_overlaps_batch(anchors, gt_boxes):
 
         # ! overlaps = (B, n, 20)
 
-    # _ProposalTargetLayer
-    # anchors  = (B, 2020, 5)
-    # gt_boxes = (B, 20, 5)
-    # 현재 anchors.dim() == 3
+    # ! _ProposalTargetLayer
+    # ! anchors  = (B, 2020, 5)
+    # ! gt_boxes = (B, 20, 5)
+    # ! 현재 anchors.dim() == 3
     elif anchors.dim() == 3:
-        N = anchors.size(1) # 2020
-        K = gt_boxes.size(1) #  20
+        N = anchors.size(1) # ! 2020
+        K = gt_boxes.size(1) #  ! 20
 
+        # ! bbox 좌표만 추출
         if anchors.size(2) == 4:
             anchors = anchors[:,:,:4].contiguous()
         else:
-            anchors = anchors[:,:,1:5].contiguous() # (B, 2020, 4)
+            anchors = anchors[:,:,1:5].contiguous() # ! (B, 2020, 4)
 
-        gt_boxes = gt_boxes[:,:,:4].contiguous() # (B, 20, 4)
+        gt_boxes = gt_boxes[:,:,:4].contiguous() # ! (B, 20, 4)
 
-        # gt_boxes의 크기 계산
-        # 먼저 gt_boxes의 너비/높이 계산
-        gt_boxes_x = (gt_boxes[:,:,2] - gt_boxes[:,:,0] + 1) # (B, 20) - (B, 20) + 1 = (B, 20)
-        gt_boxes_y = (gt_boxes[:,:,3] - gt_boxes[:,:,1] + 1) # (B, 20) - (B, 20) + 1 = (B, 20)
+        # ! gt_boxes의 크기 계산
+        # ! 먼저 gt_boxes의 너비/높이 계산
+        gt_boxes_x = (gt_boxes[:,:,2] - gt_boxes[:,:,0] + 1) # ! (B, 20) - (B, 20) + 1 = (B, 20)
+        gt_boxes_y = (gt_boxes[:,:,3] - gt_boxes[:,:,1] + 1) # ! (B, 20) - (B, 20) + 1 = (B, 20)
 
-        # 다음으로 gt_boxes의 크기 계산
-        gt_boxes_area = (gt_boxes_x * gt_boxes_y).view(batch_size, 1, K) # (B, 20) * (B, 20) = (B, 20) -> (B, 1, 20)
-        # gt_boxes_area = (B, 1, 20)
+        # ! 다음으로 gt_boxes의 크기 계산
+        gt_boxes_area = (gt_boxes_x * gt_boxes_y).view(batch_size, 1, K) # ! (B, 20) * (B, 20) = (B, 20) -> (B, 1, 20)
+        # ! gt_boxes_area = (B, 1, 20)
 
-        # anchor boxes의 크기 계산
-        # 먼저 anchor boxes의 너비/높이 계산
-        anchors_boxes_x = (anchors[:,:,2] - anchors[:,:,0] + 1) # (B, 2020) - (B, 2020) + 1 = (B, 2020)
-        anchors_boxes_y = (anchors[:,:,3] - anchors[:,:,1] + 1) # (B, 2020) - (B, 2020) + 1 = (B, 2020)
+        # ! roi boxes의 크기 계산
+        # ! 먼저 roi boxes의 너비/높이 계산
+        anchors_boxes_x = (anchors[:,:,2] - anchors[:,:,0] + 1) # ! (B, 2020) - (B, 2020) + 1 = (B, 2020)
+        anchors_boxes_y = (anchors[:,:,3] - anchors[:,:,1] + 1) # ! (B, 2020) - (B, 2020) + 1 = (B, 2020)
 
-        # 다음으로 anchor boxes의 크기 계산
-        anchors_area = (anchors_boxes_x * anchors_boxes_y).view(batch_size, N, 1) # (B, 2020) * (B, 2020) = (B, 2020) -> (B, 2020, 1)
-        # anchors_area = (B, 2020, 1)
+        # ! 다음으로 roi boxes의 크기 계산
+        anchors_area = (anchors_boxes_x * anchors_boxes_y).view(batch_size, N, 1) # ! (B, 2020) * (B, 2020) = (B, 2020) -> (B, 2020, 1)
+        # ! anchors_area = (B, 2020, 1)
 
-        # 크기가 0인 gt_boxes, anchor boxes 식별
+        # ! 비정상적인 gt_boxes, roi boxes 식별
         gt_area_zero = (gt_boxes_x == 1) & (gt_boxes_y == 1)
         anchors_area_zero = (anchors_boxes_x == 1) & (anchors_boxes_y == 1)
 
-        # IoU 계산
-        # 먼저, reshape 진행
-        boxes = anchors.view(batch_size, N, 1, 4).expand(batch_size, N, K, 4) # (B, 2020, 1, 4) -> (B, 2020, 20, 4)
-        query_boxes = gt_boxes.view(batch_size, 1, K, 4).expand(batch_size, N, K, 4) # (B, 1, 20, 4) -> (B, 2020, 20, 4)
+        # ! IoU 계산
+        # ! 먼저, reshape 진행
+        boxes = anchors.view(batch_size, N, 1, 4).expand(batch_size, N, K, 4) # ! (B, 2020, 1, 4) -> (B, 2020, 20, 4)
+        query_boxes = gt_boxes.view(batch_size, 1, K, 4).expand(batch_size, N, K, 4) # ! (B, 1, 20, 4) -> (B, 2020, 20, 4)
 
-        # intersection의 너비/높이 계산
-        # 음수인 경우 필터링
+        # ! intersection의 너비/높이 계산
+        # ! 이때 음수인 경우 필터링
         iw = (torch.min(boxes[:,:,:,2], query_boxes[:,:,:,2]) -
-            torch.max(boxes[:,:,:,0], query_boxes[:,:,:,0]) + 1) # (B, 2020, 20)
+            torch.max(boxes[:,:,:,0], query_boxes[:,:,:,0]) + 1) # ! (B, 2020, 20)
         iw[iw < 0] = 0
 
         ih = (torch.min(boxes[:,:,:,3], query_boxes[:,:,:,3]) -
-            torch.max(boxes[:,:,:,1], query_boxes[:,:,:,1]) + 1) # (B, 2020, 20)
+            torch.max(boxes[:,:,:,1], query_boxes[:,:,:,1]) + 1) # ! (B, 2020, 20)
         ih[ih < 0] = 0
 
-        # 최종적으로 IoU 계산
-        # 모든 n개의 anchor boxes와 모든 20개의 gt_boxes 간의 IoU
-        ua = anchors_area + gt_boxes_area - (iw * ih) # (B, 2020, 1) + (B, 1, 20) - (B, 2020, 20) = (B, 2020, 20)
-        overlaps = iw * ih / ua # (B, 2020, 20) * (B, 2020, 20) / (B, 2020, 20) = (B, 2020, 20)
+        # ! 최종적으로 IoU 계산
+        # ! 모든 2020개의 rois와 모든 20개의 gt_boxes 간의 IoU
+        ua = anchors_area + gt_boxes_area - (iw * ih) # ! (B, 2020, 1) + (B, 1, 20) - (B, 2020, 20) = (B, 2020, 20)
+        overlaps = iw * ih / ua # ! (B, 2020, 20) * (B, 2020, 20) / (B, 2020, 20) = (B, 2020, 20)
 
         # mask the overlap here.
-        # 이전에 식별한 크기가 0인 gt_boxes, anchor boxes 처리
-        # gt_area의 크기가 0인 경우 0으로, anchor_area가 0인 경우 -1로 처리
+        # ! 이전에 식별한 비정상적인 gt_boxes, rois 처리
+        # ! gt_area의 크기가 0인 경우 0으로, anchor_area가 0인 경우 -1로 처리
         overlaps.masked_fill_(gt_area_zero.view(batch_size, 1, K).expand(batch_size, N, K), 0)
         overlaps.masked_fill_(anchors_area_zero.view(batch_size, N, 1).expand(batch_size, N, K), -1)
 
-        # overlaps = (B, 2020, 20)
+        # ! overlaps = (B, 2020, 20)
 
     else:
         raise ValueError('anchors input dimension is not correct.')

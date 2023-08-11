@@ -128,32 +128,43 @@ class _RPN(nn.Module):
             # ! im_info       = (B, 3)          -> image resolution 정보     
             # ! num_boxes     = (B,)            -> ground-truth bboxes의 수
             rpn_data = self.RPN_anchor_target((rpn_cls_score.data, gt_boxes, im_info, num_boxes))
-            # rpn_data[0] = labels               (B, 1, 333, 37)
-            # rpn_data[1] = bbox_targets         (B, 36, 37, 37)
-            # rpn_data[2] = bbox_inside_weights  (B, 36, 37, 37)
-            # rpn_data[3] = bbox_outside_weights (B, 36, 37, 37)
+            # ! rpn_data[0] = labels               (B, 1, 333, 37)
+            # ! rpn_data[1] = bbox_targets         (B, 36, 37, 37)
+            # ! rpn_data[2] = bbox_inside_weights  (B, 36, 37, 37)
+            # ! rpn_data[3] = bbox_outside_weights (B, 36, 37, 37)
 
-            # Objectness score loss 계산
             # compute classification loss
-            rpn_cls_score = rpn_cls_score_reshape.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2) # (B, 12321, 2)
-            rpn_label = rpn_data[0].view(batch_size, -1) # (B, 12321)
+            # ! RPN cls loss 계산
+            rpn_cls_score = rpn_cls_score_reshape.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2) # ! (B, 12321, 2)
+            rpn_label = rpn_data[0].view(batch_size, -1) # ! (B, 12321)
 
-            rpn_keep = Variable(rpn_label.view(-1).ne(-1).nonzero().view(-1)) # (Bn,)
-            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep) # (Bn, 2)
-            rpn_label = torch.index_select(rpn_label.view(-1), 0, rpn_keep.data) # (Bn,)
+            # ! 전체 12321개의 rpn_label 중 -1이 아닌, 즉, 고려 대상이 아닌 anchors의 indices만 추출
+            # ! 그 수를 p라고 가정
+            rpn_keep = Variable(rpn_label.view(-1).ne(-1).nonzero().view(-1)) # ! (Bp,)
+
+            # ! indices를 바탕으로 전체 12321개의 rpn_label, rpn_cls_score를 필터링
+            rpn_cls_score = torch.index_select(rpn_cls_score.view(-1,2), 0, rpn_keep) # ! (Bp, 2)
+            rpn_label = torch.index_select(rpn_label.view(-1), 0, rpn_keep.data) # ! (Bp,)
             rpn_label = Variable(rpn_label.long())
-            self.rpn_loss_cls = F.cross_entropy(rpn_cls_score, rpn_label) # -> scalar loss value
+
+            # ! RPN cls_loss 계산
+            self.rpn_loss_cls = F.cross_entropy(rpn_cls_score, rpn_label) # ! -> scalar loss value
             fg_cnt = torch.sum(rpn_label.data.ne(0))
 
-            # bbox reg loss 계산
+            # ! bbox reg loss 계산
             rpn_bbox_targets, rpn_bbox_inside_weights, rpn_bbox_outside_weights = rpn_data[1:]
 
             # compute bbox regression loss  
-            rpn_bbox_inside_weights = Variable(rpn_bbox_inside_weights)   # (B, 36, 37, 37)
-            rpn_bbox_outside_weights = Variable(rpn_bbox_outside_weights) # (B, 36, 37, 37)
-            rpn_bbox_targets = Variable(rpn_bbox_targets)                 # (B, 36, 37, 37)
+            rpn_bbox_inside_weights = Variable(rpn_bbox_inside_weights)   # ! (B, 36, 37, 37)
+            rpn_bbox_outside_weights = Variable(rpn_bbox_outside_weights) # ! (B, 36, 37, 37)
+            rpn_bbox_targets = Variable(rpn_bbox_targets)                 # ! (B, 36, 37, 37)
 
+            # ! smooth L1 loss 적용
             self.rpn_loss_box = _smooth_l1_loss(rpn_bbox_pred, rpn_bbox_targets, rpn_bbox_inside_weights,
-                                                            rpn_bbox_outside_weights, sigma=3, dim=[1,2,3]) # -> scalar loss value
+                                                            rpn_bbox_outside_weights, sigma=3, dim=[1,2,3]) # ! -> scalar loss value
+
+        # ! rois               = (B, 2000, 5)      -> 2000개의 region proposals가 (batch_index, x1, y1, x2, y2)로 구성됨
+        # ! self.rpn_loss_cls  = scalar loss value -> RPN의 cls_loss
+        # ! self.rpn_loss_bbox = scalar loss value -> RPN의 bbox_loss
 
         return rois, self.rpn_loss_cls, self.rpn_loss_box

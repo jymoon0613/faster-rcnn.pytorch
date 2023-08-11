@@ -73,28 +73,31 @@ class _fasterRCNN(nn.Module):
         # ! gt_boxes  = (B, 20, 5)
         # ! num_boxes = (B,)
         rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
-        # ! rois          = (B, 2000, 5) -> 2000개의 region proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
+        # ! rois          = (B, 2000, 5)      -> 2000개의 region proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
         # ! rpn_loss_cls  = scalar loss value -> RPN의 cls_loss
         # ! rpn_loss_bbox = scalar loss value -> RPN의 bbox_loss
 
         # if it is training phrase, then use ground trubut bboxes for refining
-        if self.training:
-            # detection loss 계산을 위한 target 생성
-            # rois      = (B, 2000, 5)
-            # gt_boxes  = (B, 20, 5)
-            # num_boxes = (B,)
+        # ! training 상황을 가정
+        if self.training: # ! True
+            # ! detection loss 계산을 위한 target 생성
+            # ! rois      = (B, 2000, 5) -> 2000개의 region proposals가 (batch_num, x1, y1, x2, y2)의 형태로 저장되어있음
+            # ! gt_boxes  = (B, 20, 5)   -> ground-truth bboxes
+            # ! num_boxes = (B,)         -> number of ground-truth bboxes
             roi_data = self.RCNN_proposal_target(rois, gt_boxes, num_boxes)
             rois, rois_label, rois_target, rois_inside_ws, rois_outside_ws = roi_data
-            # rois            = (B, 128, 5)
-            # rois_label      = (B, 128)
-            # rois_target     = (B, 128, 4)
-            # rois_inside_ws  = (B, 128, 4)
-            # rois_outside_ws = (B, 128, 4)
 
-            rois_label = Variable(rois_label.view(-1).long()) # (128B)                           
-            rois_target = Variable(rois_target.view(-1, rois_target.size(2))) # (128B, 4)  
-            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2))) # (128B, 4)
-            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2))) # (128B, 4)
+            # ! rois            = (B, 128, 5) -> 최종적으로 선택된 rois
+            # ! rois_label      = (B, 128)    -> 각 rois에 대응되는 gt_cls_targets
+            # ! rois_target     = (B, 128, 4) -> bbox_reg loss gt_bbox_reg_targets
+            # ! rois_inside_ws  = (B, 128, 4) -> bbox_reg loss 가중치
+            # ! rois_outside_ws = (B, 128, 4) -> bbox_reg loss 가중치 (inside와 동일)
+
+            # ! reshape
+            rois_label = Variable(rois_label.view(-1).long()) # ! (128B,)                           
+            rois_target = Variable(rois_target.view(-1, rois_target.size(2))) # ! (128B, 4)  
+            rois_inside_ws = Variable(rois_inside_ws.view(-1, rois_inside_ws.size(2))) # ! (128B, 4)
+            rois_outside_ws = Variable(rois_outside_ws.view(-1, rois_outside_ws.size(2))) # ! (128B, 4)
         else:
             rois_label = None
             rois_target = None
@@ -106,59 +109,64 @@ class _fasterRCNN(nn.Module):
         rois = Variable(rois)
 
         # do roi pooling based on predicted rois
-        # RoI pooling 혹은 RoI align을 적용하여 feature 추출
-        # model.roi_layers.roi_pool의 SlowROIPool 참조
-        # RoI align은 RoI pooling과 달리 bilinear interpolation을 사용하여 feature maps 상에서 bbox의 더 정확한 위치에서 features를 추출함
-        # base_feat = (B, 512, 37, 37)
-        # rois.view(-1, 5) = (128B, 5)
+        # ! RoI pooling 혹은 RoI align을 적용하여 feature 추출
+        # ! model.roi_layers.roi_pool의 SlowROIPool 참조
+        # ! RoI align은 RoI pooling과 달리 bilinear interpolation을 사용하여 feature maps 상에서 bbox의 더 정확한 위치에서 features를 추출함
+        # ! base_feat = (B, 512, 37, 37)
+        # ! rois.view(-1, 5) = (128B, 5)
         if cfg.POOLING_MODE == 'align':
             pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))
-            # pooled_feat (128B, 512, 7, 7)
+            # ! pooled_feat (128B, 512, 7, 7)
         elif cfg.POOLING_MODE == 'pool':
             pooled_feat = self.RCNN_roi_pool(base_feat, rois.view(-1,5))
-            # pooled_feat (128B, 512, 7, 7)
+            # ! pooled_feat (128B, 512, 7, 7)
 
         # feed pooled features to top model
-        # features를 detection head로 전달하고 loss 계산
-        # pooled_feat (128B, 512, 7, 7)
+        # ! features를 detection head로 전달
+        # ! pooled_feat = (128B, 512, 7, 7)
         pooled_feat = self._head_to_tail(pooled_feat)
-        # pooled_feat = (128B, 4096)
+        # ! pooled_feat = fc7 = (128B, 4096)
 
         # compute bbox offset
+        # ! pooled_feat을 Fast R-CNN bbox_reg branch에 입력
         bbox_pred = self.RCNN_bbox_pred(pooled_feat)
-        # bbox_pred = (128B, 4)
-        if self.training and not self.class_agnostic:
+        # ! bbox_pred = (128B, 84) -> 21개의 class마다 (tx, ty, tw, th) 예측
+
+        if self.training and not self.class_agnostic: # ! True and True
+            # ! 각 bbox prediction을 class label에 대응되도록 정렬
             # select the corresponding columns according to roi labels
-            bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4) # bbox_pred_view = (128B, 1, 4)
-            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4)) # (128B, 1, 4)
-            bbox_pred = bbox_pred_select.squeeze(1) # (128B, 4)
+            bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4) # ! (128B, 21, 4)
+            bbox_pred_select = torch.gather(bbox_pred_view, 1, rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4)) # ! (128B, 1, 4)
+            bbox_pred = bbox_pred_select.squeeze(1) # ! (128B, 4)
 
         # compute object classification probability
-        cls_score = self.RCNN_cls_score(pooled_feat) # (128B, 21)
-        cls_prob = F.softmax(cls_score, 1) # (128B, 21)
+        # ! cls prediction 수행
+        cls_score = self.RCNN_cls_score(pooled_feat) # ! (128B, 21)
+        cls_prob = F.softmax(cls_score, 1) # ! (128B, 21)
 
+        # ! 학습을 위한 loss 계산
         RCNN_loss_cls = 0
         RCNN_loss_bbox = 0
 
-        if self.training: # True
-            # classification loss
-            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label) # scalar loss value
+        if self.training: # ! True
+            # ! classification loss
+            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label) # ! scalar loss value
 
-            # bounding box regression L1 loss
-            RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws) # scalar loss value
+            # ! bounding box regression L1 loss
+            RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws) # ! scalar loss value
 
+        # ! reshape
+        cls_prob = cls_prob.view(batch_size, rois.size(1), -1) # ! (B, 128, 21)
+        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1) # ! (B, 128, 4)
 
-        cls_prob = cls_prob.view(batch_size, rois.size(1), -1) # (B, 128, 21)
-        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1) # (B, 128, 4)
-
-        # rois           = (B, 128, 5)
-        # cls_prob       = (B, 128, 21)
-        # bbox_pred      = (B, 128, 4)
-        # rpn_loss_cls   = scalar loss value
-        # rpn_loss_bbox  = scalar loss value
-        # RCNN_loss_cls  = scalar loss value
-        # RCNN_loss_bbox = scalar loss value
-        # rois_label     = (B, 128)
+        # ! rois           = (B, 128, 5)       -> 최종적으로 선택된 rois
+        # ! cls_prob       = (B, 128, 21)      -> detection head의 class 예측값
+        # ! bbox_pred      = (B, 128, 4)       -> detection head의 bbox offset 예측값
+        # ! rpn_loss_cls   = scalar loss value -> RPN의 cls_loss 값
+        # ! rpn_loss_bbox  = scalar loss value -> RPN의 bbox_reg_loss 값
+        # ! RCNN_loss_cls  = scalar loss value -> detection head의 cls_loss 값
+        # ! RCNN_loss_bbox = scalar loss value -> detection head의 bbox_reg_loss 값
+        # ! rois_label     = (B, 128)          -> rois에 대한 gt_cls_labels
         return rois, cls_prob, bbox_pred, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label
 
     def _init_weights(self):

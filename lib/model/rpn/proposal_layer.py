@@ -122,89 +122,103 @@ class _ProposalLayer(nn.Module):
 
         # Transpose and reshape predicted bbox transformations to get them
         # into the ***same order as the anchors***:
-        bbox_deltas = bbox_deltas.permute(0, 2, 3, 1).contiguous()
-        bbox_deltas = bbox_deltas.view(batch_size, -1, 4)
-        # bbox_deltas = (B, 12321, 4) 모든 positions, anchor boxes 별 bbox offset 예측값
+        # ! anchors의 차원에 맞게 reshape
+        bbox_deltas = bbox_deltas.permute(0, 2, 3, 1).contiguous() # ! (B, 37, 37, 36)
+        bbox_deltas = bbox_deltas.view(batch_size, -1, 4) # ! (B, 12321, 4)
+        # ! bbox_deltas = (B, 12321, 4) -> 모든 positions, anchor boxes 별 bbox offset 예측값
 
         # Same story for the scores:
-        scores = scores.permute(0, 2, 3, 1).contiguous()
-        scores = scores.view(batch_size, -1)
-        # bbox_deltas = (B, 12321) 모든 positions, anchor boxes 별 objectness score 예측값
+        # ! class score도 같은 방식으로 변경
+        scores = scores.permute(0, 2, 3, 1).contiguous() # ! (B, 37, 37, 18)
+        scores = scores.view(batch_size, -1) # ! (B, 12321)
+        # ! scores = (B, 12321) -> 모든 positions, anchor boxes 별 objectness score 예측값
 
         # Convert anchors into proposals via bbox transformations
-        # RPN은 bbox regression을 위해 bbox의 중심좌표 (x, y)와 bbox의 너비/높이 (h, w)의 anchor box 기준 offset을 예측함 (tx, ty, tw, th)
-        # tx = (x - x_a) / w_a
-        # ty = (y - y_a) / h_a
-        # tw = log(w / w_a)
-        # th = log(h / h_a)
-        # 또한, ground-truth bbox reg labels (tx*, ty*, tw*, th*)는 다음과 같음
-        # tx* = (x* - x_a) / w_a
-        # ty* = (y* - y_a) / h_a
-        # tw* = log(w* / w_a)
-        # th* = log(h* / h_a)
-        # 이때 x_a, y_a, w_a, h_a는 anchor box의 중심좌표, 너비/높이임
-        # 따라서, 예측된 bbox reg offset (tx, ty, tw, th)를 실제 proposals (x, y, w, h)로 변환해주는 과정이 요구됨
+        # ! RPN은 bbox regression을 위해 bbox의 중심좌표 (x, y)와 bbox의 너비/높이 (h, w)의 anchor box 기준 offset을 예측함 (tx, ty, tw, th)
+        # ! tx = (x - x_a) / w_a
+        # ! ty = (y - y_a) / h_a
+        # ! tw = log(w / w_a)
+        # ! th = log(h / h_a)
+        # ! 이때 x_a, y_a, w_a, h_a는 anchor box의 중심좌표, 너비/높이임
+        # ! 또한, ground-truth bbox reg labels (tx*, ty*, tw*, th*)는 다음과 같음
+        # ! tx* = (x* - x_a) / w_a
+        # ! ty* = (y* - y_a) / h_a
+        # ! tw* = log(w* / w_a)
+        # ! th* = log(h* / h_a)
+        # ! 따라서, 예측된 bbox reg offset (tx, ty, tw, th)를 실제 proposals (x, y, w, h)로 변환해주는 과정이 요구됨
         proposals = bbox_transform_inv(anchors, bbox_deltas, batch_size)
-        # proposals = (B, 12321, 4)
+        # ! proposals = (B, 12321, 4)
+        # ! 출력된 proposals는 12321개의 초기 proposals를 담고 있음
 
         # 2. clip predicted boxes to image
-        # 생성된 proposals에서 이미지 영역 밖으로 벗어나는 boxes를 이미지 boundary로 clip해주는 처리를 수행
+        # ! 생성된 초기 proposals에서 이미지 영역 밖으로 벗어나는 boxes를 이미지 boundary로 clip해주는 처리를 수행
         proposals = clip_boxes(proposals, im_info, batch_size)
-        # proposals = (B, 12321, 4)
+        # ! proposals = (B, 12321, 4)
 
-        scores_keep = scores
-        proposals_keep = proposals
-        _, order = torch.sort(scores_keep, 1, True) # objectness scores를 기준으로 내림차순으로 정렬
-        # order = 정렬된 objectness score indices (B, 12321)
+        # ! 생성된 proposals 중 score 값을 기준으로 유의미한 것들만 선택하는 과정을 수행함
+        scores_keep = scores # ! 원본 score 저장
+        proposals_keep = proposals # ! 원본 proposals 저장
+        _, order = torch.sort(scores_keep, 1, True) # ! objectness scores를 기준으로 내림차순으로 정렬
+        # ! order = (B, 12321) -> 정렬된 objectness score indices 
 
-        output = scores.new(batch_size, post_nms_topN, 5).zero_() 
+        # ! 결과 저장할 tensor 정의
+        output = scores.new(batch_size, post_nms_topN, 5).zero_() # ! (B, 2000, 5)
         for i in range(batch_size):
             # # 3. remove predicted boxes with either height or width < threshold
             # # (NOTE: convert min_size to input image scale stored in im_info[2])
-            proposals_single = proposals_keep[i] # i번째 batch의 모든 proposals (12321, 4)
-            scores_single = scores_keep[i] # i번째 batch의 모든 objectness scores (12321, )
+            # ! i번째 batch의 모든 proposals (12321, 4)
+            proposals_single = proposals_keep[i] 
+            # ! i번째 batch의 모든 objectness scores (12321, )
+            scores_single = scores_keep[i] 
 
             # # 4. sort all (proposal, score) pairs by score from highest to lowest
             # # 5. take top pre_nms_topN (e.g. 6000)
-            order_single = order[i] # i번째 bacth의 정렬된 objectness score indices (12321, )
+            # ! i번째 bacth의 정렬된 objectness score indices (12321, )
+            order_single = order[i] 
 
-            # NMS를 적용하기 전 가장 높은 scores를 갖는 proposals부터 일부만을 고려함
-            # 현재 pre_nms_topN = 12000이므로 0보다 크고, 전체 개수 12321보다 작음
-            # 따라서 상위 12000개의 proposals만을 고려함
+            # ! NMS를 적용하기 전 가장 높은 scores를 갖는 proposals부터 일부만을 고려함
+            # ! 현재 pre_nms_topN = 12000이므로 0보다 크고, 12321보다 작음
+            # ! 따라서 score 상위 12000개의 proposals만을 고려함
             if pre_nms_topN > 0 and pre_nms_topN < scores_keep.numel():
-                order_single = order_single[:pre_nms_topN] # 상위 12000개 proposals의 indices (12000, )
+                # ! 상위 12000개 proposals의 indices (12000, )
+                order_single = order_single[:pre_nms_topN]
 
-
-            proposals_single = proposals_single[order_single, :] # 상위 12000개 proposals (12000, 4)
-            scores_single = scores_single[order_single].view(-1,1) # 상위 12000개 objectness score (12000, )
+            # ! 상위 12000개 proposals (12000, 4)
+            proposals_single = proposals_single[order_single, :]
+            # ! 상위 12000개 objectness score (12000, )
+            scores_single = scores_single[order_single].view(-1,1) 
 
             # 6. apply nms (e.g. threshold = 0.7)
             # 7. take after_nms_topN (e.g. 300)
             # 8. return the top proposals (-> RoIs top)
-            # proposals에 대해 objectness score를 기반으로 NMS 수행
-            # roi_layers.nms의 nms_cpu 참고
-            # nms_thresh = 0.7
-            keep_idx_i = nms(proposals_single, scores_single.squeeze(1), nms_thresh)
-            # keep_idx_i = NMS를 적용한 후 남아 있는 proposals의 indices (n,) 
+            # ! proposals에 대해 objectness score를 기반으로 NMS 수행
+            # ! roi_layers.nms의 nms_cpu 참고
+            # ! nms_thresh = 0.7
+            keep_idx_i = nms(proposals_single, scores_single.squeeze(1), nms_thresh) 
             keep_idx_i = keep_idx_i.long().view(-1)
+            # ! keep_idx_i = (n,) -> NMS를 적용한 후 남아 있는 n개의 proposal indices 
 
-            # NMS를 적용한 후 가장 높은 scores를 갖는 proposals 일부만을 고려함
-            # 현재 pre_nms_topN = 2000이므로 0보다 큼
-            # 따라서 상위 2000개의 proposals만을 고려함
-            # 이때 keep_idx_i는 NMS 과정에서 이미 objectness scores를 기준으로 내림차순 정렬되어 있음
-            # 현재 예시에서 n은 2000보다 크다고 가정함
+            # ! NMS를 적용한 후 가장 높은 scores를 갖는 proposals 일부만을 고려함
+            # ! 현재 post_nms_topN = 2000이므로 0보다 큼
+            # ! 따라서 상위 2000개의 proposals만을 고려함
+            # ! 이때 keep_idx_i는 NMS 과정에서 이미 objectness scores를 기준으로 내림차순 정렬되어 있음
+            # ! 현재 예시에서 n은 2000보다 크다고 가정함
             if post_nms_topN > 0:
-                keep_idx_i = keep_idx_i[:post_nms_topN] # 상위 2000개 proposals의 indices (2000, )
-            proposals_single = proposals_single[keep_idx_i, :] # 상위 2000개 proposals (2000, 4)
-            scores_single = scores_single[keep_idx_i, :] # 상위 2000개 objectness score (2000, )
+                # ! 상위 2000개 proposals의 indices
+                keep_idx_i = keep_idx_i[:post_nms_topN] # ! (2000, # 상위 2000개 proposals
+            # ! 상위 2000개 proposals
+            proposals_single = proposals_single[keep_idx_i, :] # ! (2000, 4)
+            # ! 상위 2000개 objectness score
+            scores_single = scores_single[keep_idx_i, :] # ! (2000, )
 
-            # 결과값 저장
-            # padding 0 at the end.
-            num_proposal = proposals_single.size(0) # 2000
+            # ! 결과값 저장
+            num_proposal = proposals_single.size(0) # ! 2000
+
+            # ! (batch_index, x1, y1, x2, y2)로 구성됨
             output[i,:,0] = i
             output[i,:num_proposal,1:] = proposals_single
 
-        # output = (B, 2000, 5)
+        # ! output = (B, 2000, 5)
 
         return output
 

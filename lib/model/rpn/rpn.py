@@ -111,20 +111,22 @@ class _RPN(nn.Module):
         rois = self.RPN_proposal((rpn_cls_prob.data, rpn_bbox_pred.data,
                                  im_info, cfg_key))
         
-        # ! rois = (B, 2000, 5) -> 2000개의 proposals에 대해 (batch_num, x1, y1, x2, y2)로 구성됨
+        # ! rois = (B, 2000, 5) -> 2000개의 proposals가 (batch_index, x1, y1, x2, y2)로 구성됨
 
+        # ! Training 상황을 가정함
+        # ! RPN 학습을 위한 loss 계산
         self.rpn_loss_cls = 0
         self.rpn_loss_box = 0
 
         # generating training labels and build the rpn loss
-        if self.training:
+        if self.training: # ! True
             assert gt_boxes is not None
 
-            # training labels를 생성
-            # rpn_cls_score = (B, 18, 37, 37) 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
-            # gt_boxes      = (B, 20, 5)      ground-truth bboxes의 좌표
-            # im_info       = (B, 3)          image resolution 정보     
-            # num_boxes     = (B,)            ground-truth bboxes의 수
+            # ! training labels를 생성
+            # ! rpn_cls_score = (B, 18, 37, 37) -> 모든 feature map positions, 모든 anchor boxes에 대한 objectness score 예측값
+            # ! gt_boxes      = (B, 20, 5)      -> ground-truth bboxes의 좌표
+            # ! im_info       = (B, 3)          -> image resolution 정보     
+            # ! num_boxes     = (B,)            -> ground-truth bboxes의 수
             rpn_data = self.RPN_anchor_target((rpn_cls_score.data, gt_boxes, im_info, num_boxes))
             # rpn_data[0] = labels               (B, 1, 333, 37)
             # rpn_data[1] = bbox_targets         (B, 36, 37, 37)

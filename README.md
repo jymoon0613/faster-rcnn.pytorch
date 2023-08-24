@@ -1,4 +1,4 @@
-# A *Faster* Pytorch Implementation of Faster R-CNN
+# Faster R-CNN
 
 ## About Repository
 
@@ -7,6 +7,8 @@
 To see my review comments, you need to add the ***Better Comments*** extension in VS Code.
 
 The README for the original repository is below:
+
+# A *Faster* Pytorch Implementation of Faster R-CNN
 
 ## Introduction
 
